@@ -26,13 +26,22 @@ helpers, and concurrency.
 
 The optional facility-wide scheduling engine (brief §7.3) is built too:
 `app/scheduling.py`, solved with Google OR-Tools CP-SAT, standalone --
-not wired into the live chat flow. `tests/test_scheduling.py` covers it,
-including the brief's own §7.3 worked example reproduced directly as a
-test. Everything in the brief is now built; see
+not auto-triggered from the live chat flow. `tests/test_scheduling.py`
+covers it, including the brief's own §7.3 worked example reproduced
+directly as a test. Everything in the brief is now built; see
 `docs/developer/roadmap.md`'s "Against the PDF brief" section.
 
-Not built: any web/API surface, wiring the scheduling engine into the
-live chat flow. Full status: `docs/developer/roadmap.md`.
+A REST API + UI is built too: `app/api.py` (FastAPI), `app/api_schemas.py`
+(request/response Pydantic models), `web/index.html` (a single
+self-contained static page, vanilla JS). `POST /identify`, `POST /chat`,
+`GET /schedule/{facility_id}` -- the last one exposes the scheduling
+engine on demand, still never auto-triggered from `/chat`. No
+authentication -- local/dev tool. `tests/test_api.py` covers it. Run:
+`python scripts/serve.py`.
+
+Not built: authentication on the REST API, auto-triggering the
+scheduling engine from the live chat flow. Full status:
+`docs/developer/roadmap.md`.
 
 ## LLM provider
 
@@ -146,10 +155,17 @@ checking.
 - **`app/scheduling.py` never gets called from `app/conversation.py`.**
   It's a standalone, on-demand tool (facility-wide), not part of the
   per-driver chat path (which stays on `find_feasible_slots`, a single
-  shipment's view). Don't add a call from `handle_driver_message` into
-  the scheduling engine without treating that as the real architectural
+  shipment's view). `app/api.py` exposes it as its own endpoint (`GET
+  /schedule/{facility_id}`) -- that's still on-demand, not auto-triggered.
+  Don't add a call from `handle_driver_message`/`POST /chat` into the
+  scheduling engine without treating that as the real architectural
   decision it would be (see the module docstring for the reasoning) --
   check with the developer first.
+- **`app/api.py` has no authentication.** `driver_id` passed to `POST
+  /chat` isn't cryptographically tied to the phone number `/identify`
+  returned it for -- fine for a local/dev tool, not for an untrusted
+  network. Don't add a persistence/session layer for this without
+  checking first (CLAUDE.md section 14/section 9 on new architecture).
 - **When two data sources can describe the same real-world state, check
   for double-counting before treating both as independent hard
   constraints.** `app/scheduling.py` hit this for real:

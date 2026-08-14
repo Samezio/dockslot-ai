@@ -18,6 +18,7 @@ python scripts\demo.py       # deterministic layer against real seeded cases (no
 python scripts\chat_demo.py  # conversational layer walkthrough -- calls a real LLM
 python scripts\chat.py       # interactive chat -- talk to it yourself, calls a real LLM
 python scripts\scheduling_demo.py  # optional facility-wide scheduling engine (no API key needed)
+python scripts\serve.py      # REST API + UI -- open http://127.0.0.1:8000
 ```
 
 ## Docs

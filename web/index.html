@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dockslot-ai</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --panel: #1e293b;
+    --border: #334155;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --accent: #38bdf8;
+    --accent-text: #0f172a;
+    --driver-bubble: #334155;
+    --agent-bubble: #0369a1;
+    --error: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    padding: 24px 12px;
+  }
+  h1 { font-size: 1.25rem; margin: 0 0 4px; }
+  .subtitle { color: var(--muted); font-size: 0.85rem; margin-bottom: 20px; }
+  main { width: 100%; max-width: 720px; display: flex; flex-direction: column; gap: 16px; }
+  section {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  section h2 { font-size: 0.95rem; margin: 0 0 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  label { font-size: 0.85rem; color: var(--muted); display: block; margin-bottom: 4px; }
+  input[type=text] {
+    width: 100%;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: #0b1220;
+    color: var(--text);
+    font-size: 0.95rem;
+  }
+  .row { display: flex; gap: 8px; align-items: flex-end; }
+  .row > div { flex: 1; }
+  button {
+    padding: 8px 16px;
+    border-radius: 6px;
+    border: none;
+    background: var(--accent);
+    color: var(--accent-text);
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 0.9rem;
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button:hover:not(:disabled) { filter: brightness(1.1); }
+  .hint { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
+  .error { color: var(--error); font-size: 0.85rem; margin-top: 8px; }
+  #driverInfo { font-size: 0.9rem; margin-top: 10px; }
+  #driverInfo .shipment { color: var(--muted); }
+  #chatSection { display: none; }
+  #transcript {
+    height: 320px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 12px;
+    padding-right: 4px;
+  }
+  .bubble { max-width: 80%; padding: 8px 12px; border-radius: 10px; font-size: 0.9rem; white-space: pre-wrap; }
+  .bubble.driver { align-self: flex-end; background: var(--driver-bubble); }
+  .bubble.agent { align-self: flex-start; background: var(--agent-bubble); }
+  .bubble.system { align-self: center; color: var(--muted); font-size: 0.8rem; background: none; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-top: 8px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+  .manual { color: #fbbf24; }
+  .unscheduled { margin-top: 10px; font-size: 0.85rem; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<h1>dockslot-ai</h1>
+<div class="subtitle">Driver chat + facility scheduling -- local dev tool, no authentication</div>
+
+<main>
+  <section id="identifySection">
+    <h2>1. Identify</h2>
+    <div class="row">
+      <div>
+        <label for="phone">Phone number</label>
+        <input type="text" id="phone" placeholder="e.g. 9000010006">
+      </div>
+      <button id="identifyBtn">Identify</button>
+    </div>
+    <div class="hint">Seeded example: 9000010006 (DRV006, Manoj Sharma).</div>
+    <div id="identifyError" class="error"></div>
+    <div id="driverInfo"></div>
+  </section>
+
+  <section id="chatSection">
+    <h2>2. Chat</h2>
+    <div id="transcript"></div>
+    <div class="row">
+      <div>
+        <input type="text" id="messageInput" placeholder="Type a message...">
+      </div>
+      <button id="sendBtn">Send</button>
+    </div>
+    <div class="hint">Talking as <span id="chatDriverLabel"></span>. <a href="#" id="switchLink" style="color: var(--accent)">switch driver</a></div>
+  </section>
+
+  <section id="scheduleSection">
+    <h2>3. Facility schedule (on-demand, optional)</h2>
+    <div class="row">
+      <div>
+        <label for="facilityId">Facility ID</label>
+        <input type="text" id="facilityId" value="FAC-JAI-01">
+      </div>
+      <button id="scheduleBtn">Load schedule</button>
+    </div>
+    <div id="scheduleError" class="error"></div>
+    <div id="scheduleResult"></div>
+  </section>
+</main>
+
+<script>
+const identifyBtn = document.getElementById('identifyBtn');
+const phoneInput = document.getElementById('phone');
+const identifyError = document.getElementById('identifyError');
+const driverInfo = document.getElementById('driverInfo');
+const chatSection = document.getElementById('chatSection');
+const chatDriverLabel = document.getElementById('chatDriverLabel');
+const transcript = document.getElementById('transcript');
+const messageInput = document.getElementById('messageInput');
+const sendBtn = document.getElementById('sendBtn');
+const switchLink = document.getElementById('switchLink');
+const facilityIdInput = document.getElementById('facilityId');
+const scheduleBtn = document.getElementById('scheduleBtn');
+const scheduleError = document.getElementById('scheduleError');
+const scheduleResult = document.getElementById('scheduleResult');
+
+let currentDriverId = null;
+
+function addBubble(text, cls) {
+  const div = document.createElement('div');
+  div.className = 'bubble ' + cls;
+  div.textContent = text;
+  transcript.appendChild(div);
+  transcript.scrollTop = transcript.scrollHeight;
+}
+
+async function identify() {
+  identifyError.textContent = '';
+  driverInfo.innerHTML = '';
+  const phone = phoneInput.value.trim();
+  if (!phone) return;
+  identifyBtn.disabled = true;
+  try {
+    const res = await fetch('/identify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone }),
+    });
+    const body = await res.json();
+    if (!res.ok) {
+      identifyError.textContent = body.detail || 'Identification failed.';
+      return;
+    }
+    currentDriverId = body.driver_id;
+    driverInfo.innerHTML = '<strong>' + body.driver_name + '</strong> (' + body.driver_id + ')';
+    if (body.shipments.length) {
+      body.shipments.forEach(s => {
+        const line = document.createElement('div');
+        line.className = 'shipment';
+        line.textContent = s.shipment_id + ' -- ' + s.current_status + ' -- ' + s.destination_facility_id + ' -- ETA ' + s.effective_eta_ts;
+        driverInfo.appendChild(line);
+      });
+    } else {
+      const line = document.createElement('div');
+      line.className = 'shipment';
+      line.textContent = '(no active shipment on file today)';
+      driverInfo.appendChild(line);
+    }
+    chatDriverLabel.textContent = body.driver_name + ' (' + body.driver_id + ')';
+    chatSection.style.display = 'block';
+    transcript.innerHTML = '';
+    addBubble('Identified as ' + body.driver_id + '. Say something to start.', 'system');
+    messageInput.focus();
+  } catch (e) {
+    identifyError.textContent = 'Request failed: ' + e;
+  } finally {
+    identifyBtn.disabled = false;
+  }
+}
+
+async function sendMessage() {
+  const text = messageInput.value.trim();
+  if (!text || !currentDriverId) return;
+  addBubble(text, 'driver');
+  messageInput.value = '';
+  sendBtn.disabled = true;
+  try {
+    const res = await fetch('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ driver_id: currentDriverId, message: text }),
+    });
+    const body = await res.json();
+    if (!res.ok) {
+      addBubble('Error: ' + (body.detail || 'request failed'), 'system');
+      return;
+    }
+    addBubble(body.reply, 'agent');
+  } catch (e) {
+    addBubble('Request failed: ' + e, 'system');
+  } finally {
+    sendBtn.disabled = false;
+  }
+}
+
+async function loadSchedule() {
+  scheduleError.textContent = '';
+  scheduleResult.innerHTML = '';
+  const facilityId = facilityIdInput.value.trim();
+  if (!facilityId) return;
+  scheduleBtn.disabled = true;
+  try {
+    const res = await fetch('/schedule/' + encodeURIComponent(facilityId));
+    const body = await res.json();
+    if (!res.ok) {
+      scheduleError.textContent = body.detail || 'Failed to load schedule.';
+      return;
+    }
+    const summary = document.createElement('div');
+    summary.className = 'hint';
+    summary.textContent = 'Status: ' + body.status + (body.objective_value !== null ? ' -- objective ' + body.objective_value : '');
+    scheduleResult.appendChild(summary);
+
+    if (body.assignments.length) {
+      const table = document.createElement('table');
+      table.innerHTML = '<thead><tr><th>Shipment</th><th>Dock</th><th>Start</th><th>End</th><th></th></tr></thead>';
+      const tbody = document.createElement('tbody');
+      body.assignments
+        .slice()
+        .sort((a, b) => a.start_minutes - b.start_minutes)
+        .forEach(a => {
+          const tr = document.createElement('tr');
+          const fmt = m => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+          tr.innerHTML = '<td>' + a.shipment_id + '</td><td>' + a.dock_id + '</td><td>' + fmt(a.start_minutes) +
+            '</td><td>' + fmt(a.end_minutes) + '</td><td class="manual">' + (a.needs_manual_approval ? 'manual approval' : '') + '</td>';
+          tbody.appendChild(tr);
+        });
+      table.appendChild(tbody);
+      scheduleResult.appendChild(table);
+    }
+
+    if (body.unscheduled_shipment_ids.length) {
+      const div = document.createElement('div');
+      div.className = 'unscheduled';
+      div.textContent = 'Not scheduled today: ' + body.unscheduled_shipment_ids.join(', ');
+      scheduleResult.appendChild(div);
+    }
+  } catch (e) {
+    scheduleError.textContent = 'Request failed: ' + e;
+  } finally {
+    scheduleBtn.disabled = false;
+  }
+}
+
+identifyBtn.addEventListener('click', identify);
+phoneInput.addEventListener('keydown', e => { if (e.key === 'Enter') identify(); });
+sendBtn.addEventListener('click', sendMessage);
+messageInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendMessage(); });
+scheduleBtn.addEventListener('click', loadSchedule);
+switchLink.addEventListener('click', e => {
+  e.preventDefault();
+  currentDriverId = null;
+  chatSection.style.display = 'none';
+  phoneInput.value = '';
+  driverInfo.innerHTML = '';
+  phoneInput.focus();
+});
+</script>
+</body>
+</html>

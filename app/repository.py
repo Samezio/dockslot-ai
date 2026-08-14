@@ -85,6 +85,25 @@ def find_driver_by_phone(conn: sqlite3.Connection, phone: str) -> Optional[Drive
     return None
 
 
+def get_driver(conn: sqlite3.Connection, driver_id: str) -> Optional[Driver]:
+    """Look up a driver by driver_id -- used where the caller already has
+    an id (e.g. the API's /chat, which trusts driver_id was obtained from
+    a prior /identify call) rather than a raw phone number."""
+    row = conn.execute(
+        "SELECT driver_id, driver_name, phone, carrier_id, driver_status FROM drivers WHERE driver_id = ?",
+        (driver_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return Driver(
+        driver_id=row["driver_id"],
+        driver_name=row["driver_name"],
+        phone=row["phone"],
+        carrier_id=row["carrier_id"],
+        driver_status=row["driver_status"],
+    )
+
+
 def find_shipments_for_driver(conn: sqlite3.Connection, driver_id: str) -> List[ShipmentSummary]:
     """Active shipments for a driver, most imminent first.
 
