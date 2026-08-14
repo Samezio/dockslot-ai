@@ -1,5 +1,14 @@
 # The deterministic layer (app/db.py, app/models.py, app/repository.py)
-# is stdlib-only on purpose: sqlite3 + dataclasses, no ORM, nothing to
-# pin here yet. Real dependencies (Pydantic, an LLM SDK, FastAPI) get
-# added when the conversational layer is built and actually needs them --
-# see CLAUDE.md section 24 (Dependencies).
+# is stdlib-only. Everything below is for the conversational layer
+# (app/llm.py, app/intent.py, app/conversation.py).
+#
+# langchain gives us one interface across LLM providers (see app/llm.py) --
+# swapping LLM_PROVIDER in .env is a config change, not a code change.
+# langchain-google-genai backs the default provider (Gemini);
+# langchain-openai backs both "openai" and "openrouter" (OpenRouter is
+# OpenAI-wire-compatible, see app/llm.py's _PROVIDERS dict).
+langchain==0.3.30
+langchain-google-genai==2.1.12
+langchain-openai==0.3.35
+pydantic==2.13.4
+python-dotenv==1.2.1

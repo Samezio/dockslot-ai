@@ -5,19 +5,36 @@ specific to working on this project as an agent.
 
 ## Current state (as of this writing)
 
-Built: the deterministic operational layer only (`app/db.py`,
-`app/models.py`, `app/repository.py`) plus DB tooling
-(`db/schema_and_seed.sql`, `scripts/build_db.py`, `scripts/demo.py`).
+Built: the deterministic operational layer (`app/db.py`, `app/models.py`,
+`app/repository.py`) plus DB tooling (`db/schema_and_seed.sql`,
+`scripts/build_db.py`, `scripts/demo.py`), and a first conversational layer
+(`app/llm.py`, `app/llm_models.py`, `app/intent.py`, `app/conversation.py`,
+`scripts/chat_demo.py`).
 
-Not built: the conversational/LLM layer, any web/API surface, automated
-tests, the optional scheduling-engine extension.
+Not built: conversation state persistence (stateless per-call right now --
+see architecture.md), any web/API surface, automated tests, the optional
+scheduling-engine extension.
 
-## Open decision: LLM provider
+## LLM provider
 
-CLAUDE.md's default AI stack lists both OpenRouter and Google Gemini.
-Neither has been chosen yet for this project -- ask the developer before
-wiring one in (CLAUDE.md section 2: ask before introducing a new external
-service).
+Chosen: **Gemini** (`google_genai`), by explicit developer decision, with
+the requirement that switching providers stay a config change. `app/llm.py`
+implements that via langchain's `init_chat_model` -- see
+`docs/developer/architecture.md`'s "Provider abstraction" section.
+
+`openrouter` has also been verified working live (it needs
+`langchain-openai` installed -- it rides the "openai" langchain provider
+with a different `base_url`). Its `_PROVIDERS` entry caps `max_tokens=300`
+because that key has limited credits and is dev-only for now -- don't
+raise/remove that cap without checking with the developer first, and don't
+add similar caps to other providers unless asked; it's specific to that
+key's situation, not a general policy.
+
+`OPEN_ROUNTER_API_KEY` (note the typo -- that's the actual name already in
+the developer's `.env` and in `app/llm.py`, don't silently "fix" it without
+checking first). `OPENAI_API_KEY` is present in `.env` but that key has no
+credits yet, per the developer -- don't assume `openai` works without
+checking.
 
 ## Conventions established so far
 
@@ -43,6 +60,22 @@ service).
   didn't have it -- `app/repository.py` uses a fixed `timezone(timedelta(...))`
   offset instead, which also matches the `+05:30`-style timestamps already
   used throughout the seed data).
+- **The LLM only extracts intent -- it never picks a slot or books one.**
+  `app/conversation.py` recomputes feasible slots fresh from
+  `app/repository.py` on every turn and matches a driver's chosen option
+  against that fresh list; it never trusts a slot reference against
+  something computed in an earlier turn or invented by the model.
+- **Replies are template strings around real query results, not
+  LLM-phrased**, to keep the LLM surface to exactly one call per message
+  and avoid a second place for it to invent something. If this needs to
+  read less mechanical later, that's a deliberate second LLM call to add,
+  not a reason to let the first call free-form the response.
+- **`app/conversation.py` is currently stateless per call.** It re-derives
+  the driver's shipment(s) and recomputes options from the DB every time --
+  it does not yet read/write `chat_threads`/`chat_messages`. A driver
+  saying "take the second one" only resolves against options computed
+  *within that same call*. Don't assume cross-turn memory exists until
+  that's built.
 - **`.project_details/` is gitignored** (it holds the original challenge
   PDF and a nested zip of the data package). Nothing in the tracked repo
   should depend on it existing -- `db/schema_and_seed.sql` is the durable,

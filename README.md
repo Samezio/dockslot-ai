@@ -11,9 +11,12 @@ Requires Python 3.9.6 (see `docs/developer/development.md` if you have multiple 
 python -m venv .venv
 .venv\Scripts\Activate.ps1   # .venv/bin/activate on macOS/Linux
 pip install -r requirements.txt
+copy .env.example .env       # then fill in an API key -- see docs/developer/development.md
 
 python scripts\build_db.py   # materializes data/dockslot.db from db/schema_and_seed.sql
-python scripts\demo.py       # walks through the deterministic layer against real seeded cases
+python scripts\demo.py       # deterministic layer against real seeded cases (no API key needed)
+python scripts\chat_demo.py  # conversational layer walkthrough -- calls a real LLM
+python scripts\chat.py       # interactive chat -- talk to it yourself, calls a real LLM
 ```
 
 ## Docs
