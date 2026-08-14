@@ -57,6 +57,17 @@ _PROVIDERS = {
         "base_url_env": "OLLAMA_BASE_URL",  # optional, defaults below if unset
         "base_url_default": "http://localhost:11434",
     },
+    # AI Credits -- another OpenAI-wire-compatible gateway, so like
+    # "openrouter" it rides the "openai" langchain provider with its own
+    # base_url and key. Both come from .env (AICREDIT_BASE_URL /
+    # AICREDIT_API_KEY) because the endpoint is account-specific.
+    # Verified working with gpt-4o-mini and gpt-4.1-mini.
+    "aicredit": {
+        "model": "gpt-4o-mini",
+        "model_provider": "openai",
+        "api_key_env": "AICREDIT_API_KEY",
+        "base_url_env": "AICREDIT_BASE_URL",  # required -- no sensible default
+    },
 }
 
 DEFAULT_PROVIDER = "google_genai"
@@ -89,7 +100,15 @@ def get_chat_model(provider: Optional[str] = None, **overrides):
     base_url_env = config.pop("base_url_env", None)
     base_url_default = config.pop("base_url_default", None)
     if base_url_env:
-        config["base_url"] = os.environ.get(base_url_env, base_url_default)
+        base_url = os.environ.get(base_url_env) or base_url_default
+        if not base_url:
+            # No default means the endpoint is account-specific -- passing
+            # None here would silently fall back to the provider's public
+            # API and fail confusingly on auth instead of on config.
+            raise RuntimeError(
+                "Provider '{}' needs {} set in the environment (.env).".format(provider, base_url_env)
+            )
+        config["base_url"] = base_url
 
     config.update(overrides)
     return init_chat_model(**config)

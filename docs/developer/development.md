@@ -48,6 +48,27 @@ confirmed working. The `openrouter` entry in `app/llm.py` sets
 Raise or remove it once this is more than a dev key; don't quietly widen
 it while it's still a shared low-credit key.
 
+### `aicredit` provider
+
+`LLM_PROVIDER=aicredit` uses an OpenAI-compatible gateway. Like
+`openrouter` it rides the `openai` langchain provider with its own
+`base_url` and key, both read from `.env`:
+
+```
+AICREDIT_API_KEY=...
+AICREDIT_BASE_URL=https://aicredits.in/v1
+```
+
+The base URL is account-specific, so there's no default -- `app/llm.py`
+raises a clear config error if it's missing rather than silently falling
+back to `api.openai.com`. Verified working with `gpt-4o-mini` (the
+default) and `gpt-4.1-mini`; roughly **2-4 s per message**.
+
+Note: the endpoint sits behind Cloudflare bot protection. The langchain /
+OpenAI SDK client works fine; a hand-rolled `urllib` request gets a
+`403 error code: 1010`. If you're debugging connectivity, test through
+langchain, not `curl`/`urllib`, or you'll chase a phantom auth problem.
+
 ### `ollama` provider (local dev only)
 
 `LLM_PROVIDER=ollama` runs against a local [Ollama](https://ollama.com)
@@ -59,8 +80,22 @@ ollama pull qwen3:8b
 ```
 
 Set `OLLAMA_BASE_URL` in `.env` only if your server isn't at the default
-`http://localhost:11434`. This provider is for local iteration -- it's
-not something to point production at.
+`http://localhost:11434`.
+
+**Expect 2-5 minutes per chat message** with `qwen3:8b` on CPU (measured:
+90 s for a bare `extract_intent`, 291 s for a full `handle_driver_message`
+turn). `qwen3` is a reasoning model and spends most of that thinking
+before it emits the structured output. Nothing is broken -- it is just
+that slow, and the UI currently gives no progress indication, so it looks
+like nothing is happening.
+
+Its structured output is also noticeably weaker than a hosted model's:
+observed `confidence='Yes'` (not one of LOW/MEDIUM/HIGH), a full ISO
+timestamp where the schema asks for `HH:MM`, and `missing_information`
+filled with invented field names rather than real questions.
+
+Use it for offline/no-cost iteration. **Do not use it for a live demo** --
+use `aicredit` or `google_genai`.
 
 ## Database
 

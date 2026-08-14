@@ -73,11 +73,21 @@ checking first). `OPENAI_API_KEY` is present in `.env` but that key has no
 credits yet, per the developer -- don't assume `openai` works without
 checking.
 
-`ollama` is a fourth provider, **local dev only** -- runs against a local
-Ollama server (`qwen3:8b`), no API key, no cost. Verified live. Don't
-treat it as a production option or suggest deploying against it; it's
-there purely so the developer can iterate without spending real provider
-credits.
+`aicredit` is an OpenAI-compatible gateway (`AICREDIT_API_KEY` +
+`AICREDIT_BASE_URL`, both from `.env` -- the base URL is account-specific
+so there is deliberately no default). Verified live, ~2-4 s per message.
+Its endpoint is behind Cloudflare bot protection: the langchain/OpenAI
+SDK client works, but `urllib`/`curl` gets `403 error code: 1010` -- don't
+diagnose that as an auth failure.
+
+`ollama` is **local dev only** -- a local Ollama server (`qwen3:8b`), no
+API key, no cost. Verified live but **2-5 minutes per chat message** on
+CPU (qwen3 is a reasoning model), and its structured output is measurably
+worse (invalid `confidence` values, wrong ETA format, invented
+`missing_information` entries). Fine for offline iteration; never suggest
+it for a demo or for production, and if someone reports "the chat isn't
+responding", check `LLM_PROVIDER` before looking for a bug -- this has
+already happened once.
 
 ## Conventions established so far
 
