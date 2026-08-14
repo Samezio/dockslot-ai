@@ -184,6 +184,39 @@ def test_choose_option_resolves_against_persisted_list_not_fresh_recompute(conn,
     assert booked is None, "must not silently book whatever is now first in a fresh list"
 
 
+def test_duplicate_message_acknowledged_without_calling_llm(conn, monkeypatch):
+    # brief section 11.2: "a driver sends duplicate messages because of
+    # weak connectivity" (seed case THR001/THR009).
+    _mock_extract(monkeypatch, _intent(DriverIntent.ASK_SLOT_OPTIONS, declared_eta_local_time="12:45"))
+    handle_driver_message(conn, "DRV010", "Any slots open after 12:45?")
+
+    monkeypatch.setattr("app.conversation.extract_intent", _refuse_to_be_called)
+    reply = handle_driver_message(conn, "DRV010", "Any slots open after 12:45?")
+    assert "already looking into" in reply.lower()
+
+    thread_id = conn.execute(
+        "SELECT thread_id FROM chat_threads WHERE driver_id='DRV010' AND shipment_id='SHP1010'"
+    ).fetchone()["thread_id"]
+    dup_row = conn.execute(
+        "SELECT is_duplicate FROM chat_messages WHERE thread_id = ? AND sender_type = 'DRIVER' ORDER BY message_ts DESC, rowid DESC LIMIT 1",
+        (thread_id,),
+    ).fetchone()
+    assert dup_row["is_duplicate"] == 1
+
+    # A duplicate turn must not disturb state set by the real first turn.
+    exception = conn.execute("SELECT exception_status FROM driver_exceptions WHERE thread_id = ?", (thread_id,)).fetchone()
+    assert exception["exception_status"] == "SLOT_OPTIONS_SHARED"
+
+
+def test_non_duplicate_followup_still_calls_llm(conn, monkeypatch):
+    _mock_extract(monkeypatch, _intent(DriverIntent.ASK_SLOT_OPTIONS, declared_eta_local_time="12:45"))
+    handle_driver_message(conn, "DRV010", "Any slots open after 12:45?")
+
+    _mock_extract(monkeypatch, _intent(DriverIntent.CHECK_STATUS))
+    reply = handle_driver_message(conn, "DRV010", "A genuinely different follow-up message.")
+    assert "already looking into" not in reply.lower()
+
+
 def test_check_status_reports_current_appointment(conn, monkeypatch):
     _mock_extract(monkeypatch, _intent(DriverIntent.CHECK_STATUS))
     reply = handle_driver_message(conn, "DRV001", "Has the warehouse confirmed my slot?")

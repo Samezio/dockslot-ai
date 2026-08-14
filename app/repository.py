@@ -348,6 +348,7 @@ def record_message(
     parsed_intent: Optional[str] = None,
     extracted_eta_ts: Optional[str] = None,
     offered_slot_ids: Optional[List[str]] = None,
+    is_duplicate: bool = False,
 ) -> str:
     message_id = "MSG-{}".format(uuid.uuid4().hex[:8].upper())
     conn.execute(
@@ -356,7 +357,7 @@ def record_message(
             chat_message_id, thread_id, sender_type, sender_reference, message_text,
             message_ts, external_message_id, is_duplicate, parsed_intent,
             extracted_eta_ts, requires_human_review, offered_slot_ids
-        ) VALUES (?, ?, ?, NULL, ?, ?, NULL, 0, ?, ?, 0, ?)
+        ) VALUES (?, ?, ?, NULL, ?, ?, NULL, ?, ?, ?, 0, ?)
         """,
         (
             message_id,
@@ -364,6 +365,7 @@ def record_message(
             sender_type,
             message_text,
             _now_ist_iso(),
+            1 if is_duplicate else 0,
             parsed_intent,
             extracted_eta_ts,
             ",".join(offered_slot_ids) if offered_slot_ids else None,
@@ -371,6 +373,44 @@ def record_message(
     )
     conn.commit()
     return message_id
+
+
+_DUPLICATE_WINDOW_SECONDS = 300
+
+
+def _normalize_message_text(text: str) -> str:
+    return " ".join(text.strip().lower().split())
+
+
+def is_recent_duplicate_message(conn: sqlite3.Connection, thread_id: str, message_text: str) -> bool:
+    """True if this looks like the same driver message arriving again --
+    e.g. a messaging retry from weak connectivity (brief section 11.2,
+    seed case THR001/THR009). Deliberately simple: exact match after
+    normalizing whitespace/case, within a short time window of the
+    thread's last DRIVER message. Not fuzzy matching -- the brief's
+    scenario is a literal retry sending identical content, not a
+    rephrased follow-up.
+
+    Note: our thread-per-(driver,shipment) reuse (get_or_create_open_thread)
+    already prevents the seed's THR001/THR009 pattern of a retry spawning a
+    whole separate thread/exception -- this only needs to catch the
+    message-level repeat within one thread.
+    """
+    row = conn.execute(
+        """
+        SELECT message_text, message_ts FROM chat_messages
+        WHERE thread_id = ? AND sender_type = 'DRIVER'
+        ORDER BY message_ts DESC, rowid DESC LIMIT 1
+        """,
+        (thread_id,),
+    ).fetchone()
+    if row is None:
+        return False
+    if _normalize_message_text(row["message_text"]) != _normalize_message_text(message_text):
+        return False
+
+    elapsed = (datetime.fromisoformat(_now_ist_iso()) - datetime.fromisoformat(row["message_ts"])).total_seconds()
+    return elapsed <= _DUPLICATE_WINDOW_SECONDS
 
 
 def get_last_offered_slot_ids(conn: sqlite3.Connection, thread_id: str) -> List[str]:

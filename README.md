@@ -17,6 +17,7 @@ python scripts\build_db.py   # materializes data/dockslot.db from db/schema_and_
 python scripts\demo.py       # deterministic layer against real seeded cases (no API key needed)
 python scripts\chat_demo.py  # conversational layer walkthrough -- calls a real LLM
 python scripts\chat.py       # interactive chat -- talk to it yourself, calls a real LLM
+python scripts\scheduling_demo.py  # optional facility-wide scheduling engine (no API key needed)
 ```
 
 ## Docs
