@@ -59,6 +59,15 @@ Also added this session: an `ollama` LLM provider entry (`app/llm.py`)
 for local dev testing against a local model -- no API key, no cost. Dev
 tool only, not a production option.
 
+## Known issues (found, not yet fixed)
+
+A deep review after the API/UI landed turned up 5 confirmed bugs and 8
+smaller gaps -- all reproduced, none fixed yet. See
+[known-issues/](known-issues/README.md). The two worth knowing before
+demoing anything: multi-shipment drivers can't use the chat at all
+(including DRV006, the phone number the UI suggests), and the scheduler's
+proposals both move confirmed appointments and mostly can't be booked.
+
 ## Not built yet
 
 - Authentication on the REST API.

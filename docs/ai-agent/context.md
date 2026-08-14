@@ -43,6 +43,15 @@ Not built: authentication on the REST API, auto-triggering the
 scheduling engine from the live chat flow. Full status:
 `docs/developer/roadmap.md`.
 
+**Read `docs/developer/known-issues/README.md` before trusting any of
+this.** A review found 5 confirmed bugs + 8 smaller gaps, all reproduced,
+none fixed. All 57 tests pass with every one of them present, so a green
+test run is NOT evidence these paths work -- the blind spots are
+structural (e.g. no conversation test uses a multi-shipment driver; no
+scheduling test cross-checks against `appointment_slots` or
+`appointments`). In particular don't assume the chat handles
+multi-shipment drivers, or that a `/schedule` proposal is bookable.
+
 ## LLM provider
 
 Chosen: **Gemini** (`google_genai`), by explicit developer decision, with

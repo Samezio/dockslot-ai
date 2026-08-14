@@ -26,4 +26,5 @@ python scripts\serve.py      # REST API + UI -- open http://127.0.0.1:8000
 - [docs/developer/architecture.md](docs/developer/architecture.md) — system design, layers, key decisions
 - [docs/developer/development.md](docs/developer/development.md) — local setup, running, rebuilding the DB, tests
 - [docs/developer/roadmap.md](docs/developer/roadmap.md) — what's done, what's next
+- [docs/developer/known-issues/](docs/developer/known-issues/README.md) — confirmed bugs and gaps, with reproductions
 - [docs/ai-agent/context.md](docs/ai-agent/context.md) — project state and conventions for AI coding agents
