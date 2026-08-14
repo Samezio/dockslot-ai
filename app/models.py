@@ -11,6 +11,15 @@ from typing import Optional
 
 
 @dataclass
+class Driver:
+    driver_id: str
+    driver_name: str
+    phone: str
+    carrier_id: str
+    driver_status: str
+
+
+@dataclass
 class ShipmentSummary:
     shipment_id: str
     driver_id: str

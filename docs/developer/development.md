@@ -99,8 +99,9 @@ python scripts\chat.py [DRIVER_ID]
 ```
 
 `scripts/chat.py` is the actual interactive way to use this -- an
-in-terminal chat loop. Defaults to driver `DRV006`; pass a different one
-as an argument, or switch mid-session with `/driver DRV0xx`. `/quit` to
-exit. Seeded driver IDs are `DRV001`-`DRV015` (see `db/schema_and_seed.sql`
-or query the `drivers` table for who's assigned what). Same as
-`chat_demo.py`, this calls a real LLM per message.
+in-terminal chat loop. It asks for your phone number and looks you up
+(no default driver -- mirrors how a real channel like WhatsApp would
+identify the sender). `/switch` to re-identify, `/quit` to exit. Seeded
+phone numbers are in `drivers.phone` (e.g. `9000010006` = DRV006, Manoj
+Sharma); `--driver DRV0xx` skips identification as a dev shortcut and
+says so. Same as `chat_demo.py`, this calls a real LLM per message.

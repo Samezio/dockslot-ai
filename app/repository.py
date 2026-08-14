@@ -15,7 +15,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
-from app.models import BookingResult, ShipmentSummary, SlotOption
+from app.models import BookingResult, Driver, ShipmentSummary, SlotOption
 
 # Fixed +05:30 offset rather than zoneinfo("Asia/Kolkata"): matches the
 # timestamp style already used throughout db/schema_and_seed.sql, and
@@ -47,6 +47,37 @@ def _row_to_shipment_summary(row: sqlite3.Row) -> ShipmentSummary:
         current_slot_start_ts=row["slot_start_ts"],
         current_slot_end_ts=row["slot_end_ts"],
     )
+
+
+def _digits_only(s: str) -> str:
+    return "".join(ch for ch in s if ch.isdigit())
+
+
+def find_driver_by_phone(conn: sqlite3.Connection, phone: str) -> Optional[Driver]:
+    """Look up a driver by phone number.
+
+    This is the identity check a real channel (e.g. WhatsApp) would do
+    automatically from the sender's number -- chat.py asks for it
+    explicitly since there's no real channel here. Matches on the last 10
+    digits so formatting differences (spaces, dashes, missing country
+    code) don't cause a false miss; seed data is small enough (15 drivers)
+    that scanning it in Python is fine, a real deployment would normalize
+    phone numbers at write time and index/query on that instead.
+    """
+    suffix = _digits_only(phone)[-10:]
+    if len(suffix) < 10:
+        return None
+    rows = conn.execute("SELECT driver_id, driver_name, phone, carrier_id, driver_status FROM drivers").fetchall()
+    for row in rows:
+        if _digits_only(row["phone"])[-10:] == suffix:
+            return Driver(
+                driver_id=row["driver_id"],
+                driver_name=row["driver_name"],
+                phone=row["phone"],
+                carrier_id=row["carrier_id"],
+                driver_status=row["driver_status"],
+            )
+    return None
 
 
 def find_shipments_for_driver(conn: sqlite3.Connection, driver_id: str) -> List[ShipmentSummary]:
