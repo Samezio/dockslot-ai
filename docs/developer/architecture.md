@@ -116,13 +116,39 @@ takes the validated intent and does everything else deterministically:
   previously-offered option they picked), never to decide *what's
   available*.
 - Only calls `propose_booking()` when the driver's message is classified
-  `CHOOSE_OPTION` and can be matched (by ordinal, dock code, or time) against
-  a **freshly recomputed** option list -- never against a list shown in an
-  earlier turn, which could be stale.
+  `CHOOSE_OPTION` and can be matched (by ordinal, dock code, or time)
+  against the options **actually shown in this thread's last turn**
+  (persisted -- see below), re-verified for current availability right
+  before booking. Never against a blind fresh recompute, which could
+  silently reorder and make "the first one" mean something different than
+  what the driver saw.
 - Every reply is built from template strings around real query results,
   not LLM-phrased -- lower latency, one fewer place for the model to
   invent something. Revisit if replies need to sound less mechanical once
   this is validated with real users.
+
+### Conversation state persistence
+
+Backed by the schema's own `chat_threads`/`chat_messages` tables (one
+open thread per driver+shipment, reused across turns via
+`app/repository.py::get_or_create_open_thread`). Every turn is recorded
+(`record_message`) with the classified intent and, when options were
+offered, their `slot_id`s in order (`offered_slot_ids` -- a column we
+added to `chat_messages`; not part of the original provided schema). A
+later "take the first option" resolves via `get_last_offered_slot_ids` +
+`get_slots_by_ids` against that exact stored list/order, not a fresh
+`find_feasible_slots` call -- availability is still re-checked against a
+fresh call before booking, so staleness fails safely (a clear "that
+option's gone, here are current alternatives" reply) rather than
+silently.
+
+Ambiguous-driver replies (multiple active shipments) are deliberately
+**not** persisted -- there's no resolved shipment to attach a thread to,
+and the reply is fully deterministic from `find_shipments_for_driver`
+alone, so re-asking costs nothing and can't go stale.
+
+`driver_exceptions` is not wired up yet -- still open, see "Not built
+yet" below.
 
 ### Provider abstraction (`app/llm.py`)
 
@@ -150,13 +176,13 @@ low-credit dev key. See `.env.example` for the full set of variables
 
 ## Not built yet
 
-- Conversation state persistence (`chat_threads`/`chat_messages`/
-  `driver_exceptions` exist in the schema for this). Right now
-  `handle_driver_message` is stateless -- every call re-derives everything
-  from the DB, so a driver picking "the second option" only works within
-  the options just recomputed in that same call, not across a real
-  multi-turn back-and-forth. Persisting messages/threads is the natural
-  next increment once this is validated.
+- `driver_exceptions` persistence -- `chat_threads`/`chat_messages` are
+  wired up (see above); the exception-level record (type, severity,
+  dedupe key) isn't yet.
+- Multi-driver concurrency proof -- a script that fires simultaneous
+  requests at the same slot from separate threads/connections, not just
+  sequential calls in one script (the brief's actual "many drivers"
+  challenge, §7.2).
 - Any web/API surface (FastAPI etc.) -- deferred until there's a reason to
   serve this over HTTP (e.g. a real chat channel) rather than call it
   in-process.

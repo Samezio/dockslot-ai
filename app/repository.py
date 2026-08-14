@@ -13,7 +13,7 @@ just attempts the write and reports whether SQLite accepted it.
 import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from app.models import BookingResult, Driver, ShipmentSummary, SlotOption
 
@@ -234,3 +234,127 @@ def propose_booking(
         else:
             reason = "Booking rejected: {}".format(message)
         return BookingResult(success=False, appointment_id=None, reason=reason)
+
+
+# --- Conversation state persistence -----------------------------------
+# Backs app/conversation.py's memory across turns using the schema's own
+# chat_threads/chat_messages tables (see docs/developer/architecture.md).
+# Still deterministic, still no LLM calls -- this is bookkeeping, not
+# understanding.
+
+
+def get_or_create_open_thread(conn: sqlite3.Connection, driver_id: str, shipment_id: str) -> str:
+    """One open thread per (driver, shipment); reused across turns until
+    resolved/closed."""
+    row = conn.execute(
+        """
+        SELECT thread_id FROM chat_threads
+        WHERE driver_id = ? AND shipment_id = ?
+          AND thread_status NOT IN ('RESOLVED', 'CLOSED')
+        ORDER BY opened_at DESC LIMIT 1
+        """,
+        (driver_id, shipment_id),
+    ).fetchone()
+    if row:
+        return row["thread_id"]
+
+    thread_id = "THR-{}".format(uuid.uuid4().hex[:8].upper())
+    conn.execute(
+        """
+        INSERT INTO chat_threads (thread_id, driver_id, shipment_id, opened_at, closed_at, thread_status, thread_intent)
+        VALUES (?, ?, ?, ?, NULL, 'OPEN', 'UNKNOWN')
+        """,
+        (thread_id, driver_id, shipment_id, _now_ist_iso()),
+    )
+    conn.commit()
+    return thread_id
+
+
+def set_thread_state(conn: sqlite3.Connection, thread_id: str, status: str, intent: str) -> None:
+    conn.execute(
+        "UPDATE chat_threads SET thread_status = ?, thread_intent = ? WHERE thread_id = ?",
+        (status, intent, thread_id),
+    )
+    conn.commit()
+
+
+def record_message(
+    conn: sqlite3.Connection,
+    thread_id: str,
+    sender_type: str,
+    message_text: str,
+    parsed_intent: Optional[str] = None,
+    extracted_eta_ts: Optional[str] = None,
+    offered_slot_ids: Optional[List[str]] = None,
+) -> str:
+    message_id = "MSG-{}".format(uuid.uuid4().hex[:8].upper())
+    conn.execute(
+        """
+        INSERT INTO chat_messages (
+            chat_message_id, thread_id, sender_type, sender_reference, message_text,
+            message_ts, external_message_id, is_duplicate, parsed_intent,
+            extracted_eta_ts, requires_human_review, offered_slot_ids
+        ) VALUES (?, ?, ?, NULL, ?, ?, NULL, 0, ?, ?, 0, ?)
+        """,
+        (
+            message_id,
+            thread_id,
+            sender_type,
+            message_text,
+            _now_ist_iso(),
+            parsed_intent,
+            extracted_eta_ts,
+            ",".join(offered_slot_ids) if offered_slot_ids else None,
+        ),
+    )
+    conn.commit()
+    return message_id
+
+
+def get_last_offered_slot_ids(conn: sqlite3.Connection, thread_id: str) -> List[str]:
+    """slot_ids from the most recent AGENT message in this thread that
+    offered options, in the order they were shown. Empty if none."""
+    row = conn.execute(
+        """
+        SELECT offered_slot_ids FROM chat_messages
+        WHERE thread_id = ? AND sender_type = 'AGENT' AND offered_slot_ids IS NOT NULL
+        ORDER BY message_ts DESC LIMIT 1
+        """,
+        (thread_id,),
+    ).fetchone()
+    if not row or not row["offered_slot_ids"]:
+        return []
+    return row["offered_slot_ids"].split(",")
+
+
+def get_slots_by_ids(conn: sqlite3.Connection, slot_ids: List[str]) -> Dict[str, SlotOption]:
+    """Dock/time info for specific slots regardless of current
+    availability -- lets a caller resolve "the first option" against what
+    was actually offered even if it's since been taken. Availability
+    itself must be re-checked separately (e.g. against
+    find_feasible_slots' current result) before booking."""
+    if not slot_ids:
+        return {}
+    placeholders = ",".join("?" for _ in slot_ids)
+    rows = conn.execute(
+        """
+        SELECT sl.slot_id, sl.facility_id, d.dock_code, d.dock_type, sl.slot_start_ts, sl.slot_end_ts
+        FROM appointment_slots sl
+        JOIN docks d ON d.dock_id = sl.dock_id
+        WHERE sl.slot_id IN ({})
+        """.format(placeholders),
+        slot_ids,
+    ).fetchall()
+    return {
+        row["slot_id"]: SlotOption(
+            slot_id=row["slot_id"],
+            facility_id=row["facility_id"],
+            dock_code=row["dock_code"],
+            dock_type=row["dock_type"],
+            slot_start_ts=row["slot_start_ts"],
+            slot_end_ts=row["slot_end_ts"],
+            needs_manual_approval=False,
+            manual_approval_reason=None,
+        )
+        for row in rows
+    }

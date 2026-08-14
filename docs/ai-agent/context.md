@@ -7,13 +7,15 @@ specific to working on this project as an agent.
 
 Built: the deterministic operational layer (`app/db.py`, `app/models.py`,
 `app/repository.py`) plus DB tooling (`db/schema_and_seed.sql`,
-`scripts/build_db.py`, `scripts/demo.py`), and a first conversational layer
+`scripts/build_db.py`, `scripts/demo.py`); a conversational layer
 (`app/llm.py`, `app/llm_models.py`, `app/intent.py`, `app/conversation.py`,
-`scripts/chat_demo.py`).
+`scripts/chat.py`, `scripts/chat_demo.py`) with driver identity by phone
+lookup (no hardcoded default) and conversation state persisted via
+`chat_threads`/`chat_messages` (see architecture.md).
 
-Not built: conversation state persistence (stateless per-call right now --
-see architecture.md), any web/API surface, automated tests, the optional
-scheduling-engine extension.
+Not built: `driver_exceptions` persistence, a real multi-driver concurrency
+proof, any web/API surface, automated tests, the optional scheduling-engine
+extension.
 
 ## LLM provider
 
@@ -61,21 +63,36 @@ checking.
   offset instead, which also matches the `+05:30`-style timestamps already
   used throughout the seed data).
 - **The LLM only extracts intent -- it never picks a slot or books one.**
-  `app/conversation.py` recomputes feasible slots fresh from
-  `app/repository.py` on every turn and matches a driver's chosen option
-  against that fresh list; it never trusts a slot reference against
-  something computed in an earlier turn or invented by the model.
+  A driver's chosen option is matched against what was actually persisted
+  as shown in that thread's last turn (`get_last_offered_slot_ids` +
+  `get_slots_by_ids`), re-verified for current availability right before
+  booking -- never a slot reference invented by the model, and never a
+  blind fresh recompute (which could silently reorder).
 - **Replies are template strings around real query results, not
   LLM-phrased**, to keep the LLM surface to exactly one call per message
   and avoid a second place for it to invent something. If this needs to
   read less mechanical later, that's a deliberate second LLM call to add,
   not a reason to let the first call free-form the response.
-- **`app/conversation.py` is currently stateless per call.** It re-derives
-  the driver's shipment(s) and recomputes options from the DB every time --
-  it does not yet read/write `chat_threads`/`chat_messages`. A driver
-  saying "take the second one" only resolves against options computed
-  *within that same call*. Don't assume cross-turn memory exists until
-  that's built.
+- **Conversation state persists via `chat_threads`/`chat_messages`**
+  (`app/repository.py`'s `get_or_create_open_thread`/`record_message`/
+  `get_last_offered_slot_ids`/`get_slots_by_ids`/`set_thread_state`). One
+  open thread per (driver, shipment), reused across turns -- including
+  reusing a pre-seeded thread if one's already open for that pair (seen in
+  practice: DRV012's seeded THR002 got reused, not duplicated). Ambiguous-
+  driver replies (no resolved shipment yet) are deliberately NOT
+  persisted -- see architecture.md for why.
+- **`chat_messages.offered_slot_ids` is a column we added**, not part of
+  the original provided schema (comma-separated slot_ids, order
+  preserved). Existing seed INSERTs were patched to append `,NULL`. If you
+  add more columns to seeded tables, patch every existing positional
+  INSERT the same way -- SQLite's column-less `INSERT INTO t VALUES(...)`
+  requires a value for every column.
+- **`chat_threads.thread_intent`'s CHECK constraint was extended** to add
+  `CHOOSE_OPTION` -- the original schema's list of 6 didn't match
+  `app/llm_models.py`'s `DriverIntent` enum of 7. If that enum gains
+  another value, the CHECK constraint needs the same update or inserts
+  using it will fail with `IntegrityError` (this happened once already,
+  live, via `set_thread_state`).
 - **`.project_details/` is gitignored** (it holds the original challenge
   PDF and a nested zip of the data package). Nothing in the tracked repo
   should depend on it existing -- `db/schema_and_seed.sql` is the durable,

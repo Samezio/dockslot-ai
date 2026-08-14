@@ -188,28 +188,34 @@ CREATE TABLE chat_messages (
     parsed_intent TEXT,
     extracted_eta_ts TEXT,
     requires_human_review INTEGER NOT NULL DEFAULT 0 CHECK (requires_human_review IN (0,1)),
+    -- Added by app/repository.py (not part of the original provided schema):
+    -- comma-separated slot_ids offered on an AGENT message, so a later
+    -- "take the first option" resolves against what was actually shown,
+    -- not a freshly (and possibly differently ordered) recomputed list.
+    -- See docs/developer/architecture.md "Conversation state persistence".
+    offered_slot_ids TEXT,
     FOREIGN KEY (thread_id) REFERENCES chat_threads(thread_id)
 );
-INSERT INTO "chat_messages" VALUES('MSG001','THR001','DRIVER','DRV006','Traffic after Shahpura. Reaching around 11:20. Any slot after 12?','2026-08-04T09:34:00+05:30','wa-9001',0,'REPORT_DELAY','2026-08-04T11:20:00+05:30',0);
-INSERT INTO "chat_messages" VALUES('MSG002','THR001','AGENT','agent','Your current slot is 10:00–11:00 at Jaipur DC. I can check compatible slots after your declared ETA. Do you have a latest time by which unloading must finish?','2026-08-04T09:34:05+05:30',NULL,0,'ASK_MISSING_CONSTRAINT',NULL,0);
-INSERT INTO "chat_messages" VALUES('MSG003','THR002','DRIVER','DRV012','Tyre repaired. I can reach 11:10. I need to leave the warehouse before 1:30 for another pickup.','2026-08-04T09:29:00+05:30','wa-9002',0,'REPORT_DELAY','2026-08-04T11:10:00+05:30',0);
-INSERT INTO "chat_messages" VALUES('MSG004','THR002','AGENT','agent','Understood. Should 1:30 PM be treated as the latest gate-out time or the latest unloading start time?','2026-08-04T09:29:06+05:30',NULL,0,'ASK_MISSING_CONSTRAINT',NULL,0);
-INSERT INTO "chat_messages" VALUES('MSG005','THR003','DRIVER','DRV013','I am late by one hour.','2026-08-04T09:19:00+05:30','wa-9003',0,'REPORT_DELAY',NULL,1);
-INSERT INTO "chat_messages" VALUES('MSG006','THR003','AGENT','agent','Does one hour mean your new arrival time is 11:00 AM, or that the delay may continue for another hour?','2026-08-04T09:19:05+05:30',NULL,0,'ASK_MISSING_ETA',NULL,0);
-INSERT INTO "chat_messages" VALUES('MSG007','THR004','DRIVER','DRV014','Origin released me late. ETA 11:25. This load is urgent. Can I get the first possible dock?','2026-08-04T09:44:00+05:30','wa-9004',0,'REPORT_DELAY','2026-08-04T11:25:00+05:30',0);
-INSERT INTO "chat_messages" VALUES('MSG008','THR004','AGENT','agent','I found one possible standard-dock slot, but warehouse confirmation is still pending. I will not treat it as confirmed until the scheduling system accepts it.','2026-08-04T09:52:10+05:30',NULL,0,'CHECK_STATUS',NULL,0);
-INSERT INTO "chat_messages" VALUES('MSG009','THR005','DRIVER','DRV015','Evening traffic. ETA 6:30. Can the reefer unload tonight?','2026-08-04T16:24:00+05:30','wa-9005',0,'REPORT_DELAY','2026-08-04T18:30:00+05:30',0);
-INSERT INTO "chat_messages" VALUES('MSG010','THR005','AGENT','agent','The reefer dock is planned for maintenance from 6 PM. I cannot find a valid same-day reefer slot from the current schedule, so this needs operations review.','2026-08-04T16:24:08+05:30',NULL,0,'ESCALATE_NO_FEASIBLE_SLOT',NULL,0);
-INSERT INTO "chat_messages" VALUES('MSG011','THR006','DRIVER','DRV007','Heavy trailer ETA 12:00. Original heavy-bay slot will be missed. What is next?','2026-08-04T09:39:00+05:30','wa-9006',0,'REPORT_DELAY','2026-08-04T12:00:00+05:30',0);
-INSERT INTO "chat_messages" VALUES('MSG012','THR007','DRIVER','DRV003','I am already at the gate. Can I get a dock now instead of waiting for 9?','2026-08-04T08:22:00+05:30','wa-9007',0,'EARLY_ARRIVAL',NULL,0);
-INSERT INTO "chat_messages" VALUES('MSG013','THR007','AGENT','agent','I can check current dock availability, but arriving early does not automatically give priority over trucks already scheduled or waiting.','2026-08-04T08:22:04+05:30',NULL,0,'EXPLAIN_POLICY',NULL,0);
-INSERT INTO "chat_messages" VALUES('MSG014','THR008','DRIVER','DRV004','I reached late and am in the yard. Has a new dock been assigned?','2026-08-04T09:27:00+05:30','wa-9008',0,'CHECK_STATUS',NULL,0);
-INSERT INTO "chat_messages" VALUES('MSG015','THR009','DRIVER','DRV006','Traffic after Shahpura. Reaching around 11:20. Any slot after 12?','2026-08-04T09:35:02+05:30','wa-9009',1,'REPORT_DELAY','2026-08-04T11:20:00+05:30',0);
-INSERT INTO "chat_messages" VALUES('MSG016','THR010','DRIVER','DRV004','I will be late by 45 minutes.','2026-08-04T09:31:00+05:30','wa-9010',0,'REPORT_DELAY',NULL,1);
-INSERT INTO "chat_messages" VALUES('MSG017','THR010','AGENT','agent','You have two shipments assigned today. Are you referring to ORD-260804-004 or the later ORD-260804-020?','2026-08-04T09:31:05+05:30',NULL,0,'ASK_SHIPMENT_ID',NULL,0);
-INSERT INTO "chat_messages" VALUES('MSG018','THR011','DRIVER','DRV001','What slots are possible after 1 PM if I reach around 12:45?','2026-08-04T10:02:00+05:30','wa-9011',0,'ASK_SLOT_OPTIONS','2026-08-04T12:45:00+05:30',0);
-INSERT INTO "chat_messages" VALUES('MSG019','THR012','DRIVER','DRV008','Is my 4 PM slot still active?','2026-08-04T10:12:00+05:30','wa-9012',0,'CHECK_STATUS',NULL,0);
-INSERT INTO "chat_messages" VALUES('MSG020','THR012','AGENT','agent','The shipment and its appointment were cancelled. Please contact dispatch before travelling.','2026-08-04T10:12:05+05:30',NULL,0,'CANCELLED_SHIPMENT',NULL,0);
+INSERT INTO "chat_messages" VALUES('MSG001','THR001','DRIVER','DRV006','Traffic after Shahpura. Reaching around 11:20. Any slot after 12?','2026-08-04T09:34:00+05:30','wa-9001',0,'REPORT_DELAY','2026-08-04T11:20:00+05:30',0,NULL);
+INSERT INTO "chat_messages" VALUES('MSG002','THR001','AGENT','agent','Your current slot is 10:00–11:00 at Jaipur DC. I can check compatible slots after your declared ETA. Do you have a latest time by which unloading must finish?','2026-08-04T09:34:05+05:30',NULL,0,'ASK_MISSING_CONSTRAINT',NULL,0,NULL);
+INSERT INTO "chat_messages" VALUES('MSG003','THR002','DRIVER','DRV012','Tyre repaired. I can reach 11:10. I need to leave the warehouse before 1:30 for another pickup.','2026-08-04T09:29:00+05:30','wa-9002',0,'REPORT_DELAY','2026-08-04T11:10:00+05:30',0,NULL);
+INSERT INTO "chat_messages" VALUES('MSG004','THR002','AGENT','agent','Understood. Should 1:30 PM be treated as the latest gate-out time or the latest unloading start time?','2026-08-04T09:29:06+05:30',NULL,0,'ASK_MISSING_CONSTRAINT',NULL,0,NULL);
+INSERT INTO "chat_messages" VALUES('MSG005','THR003','DRIVER','DRV013','I am late by one hour.','2026-08-04T09:19:00+05:30','wa-9003',0,'REPORT_DELAY',NULL,1,NULL);
+INSERT INTO "chat_messages" VALUES('MSG006','THR003','AGENT','agent','Does one hour mean your new arrival time is 11:00 AM, or that the delay may continue for another hour?','2026-08-04T09:19:05+05:30',NULL,0,'ASK_MISSING_ETA',NULL,0,NULL);
+INSERT INTO "chat_messages" VALUES('MSG007','THR004','DRIVER','DRV014','Origin released me late. ETA 11:25. This load is urgent. Can I get the first possible dock?','2026-08-04T09:44:00+05:30','wa-9004',0,'REPORT_DELAY','2026-08-04T11:25:00+05:30',0,NULL);
+INSERT INTO "chat_messages" VALUES('MSG008','THR004','AGENT','agent','I found one possible standard-dock slot, but warehouse confirmation is still pending. I will not treat it as confirmed until the scheduling system accepts it.','2026-08-04T09:52:10+05:30',NULL,0,'CHECK_STATUS',NULL,0,NULL);
+INSERT INTO "chat_messages" VALUES('MSG009','THR005','DRIVER','DRV015','Evening traffic. ETA 6:30. Can the reefer unload tonight?','2026-08-04T16:24:00+05:30','wa-9005',0,'REPORT_DELAY','2026-08-04T18:30:00+05:30',0,NULL);
+INSERT INTO "chat_messages" VALUES('MSG010','THR005','AGENT','agent','The reefer dock is planned for maintenance from 6 PM. I cannot find a valid same-day reefer slot from the current schedule, so this needs operations review.','2026-08-04T16:24:08+05:30',NULL,0,'ESCALATE_NO_FEASIBLE_SLOT',NULL,0,NULL);
+INSERT INTO "chat_messages" VALUES('MSG011','THR006','DRIVER','DRV007','Heavy trailer ETA 12:00. Original heavy-bay slot will be missed. What is next?','2026-08-04T09:39:00+05:30','wa-9006',0,'REPORT_DELAY','2026-08-04T12:00:00+05:30',0,NULL);
+INSERT INTO "chat_messages" VALUES('MSG012','THR007','DRIVER','DRV003','I am already at the gate. Can I get a dock now instead of waiting for 9?','2026-08-04T08:22:00+05:30','wa-9007',0,'EARLY_ARRIVAL',NULL,0,NULL);
+INSERT INTO "chat_messages" VALUES('MSG013','THR007','AGENT','agent','I can check current dock availability, but arriving early does not automatically give priority over trucks already scheduled or waiting.','2026-08-04T08:22:04+05:30',NULL,0,'EXPLAIN_POLICY',NULL,0,NULL);
+INSERT INTO "chat_messages" VALUES('MSG014','THR008','DRIVER','DRV004','I reached late and am in the yard. Has a new dock been assigned?','2026-08-04T09:27:00+05:30','wa-9008',0,'CHECK_STATUS',NULL,0,NULL);
+INSERT INTO "chat_messages" VALUES('MSG015','THR009','DRIVER','DRV006','Traffic after Shahpura. Reaching around 11:20. Any slot after 12?','2026-08-04T09:35:02+05:30','wa-9009',1,'REPORT_DELAY','2026-08-04T11:20:00+05:30',0,NULL);
+INSERT INTO "chat_messages" VALUES('MSG016','THR010','DRIVER','DRV004','I will be late by 45 minutes.','2026-08-04T09:31:00+05:30','wa-9010',0,'REPORT_DELAY',NULL,1,NULL);
+INSERT INTO "chat_messages" VALUES('MSG017','THR010','AGENT','agent','You have two shipments assigned today. Are you referring to ORD-260804-004 or the later ORD-260804-020?','2026-08-04T09:31:05+05:30',NULL,0,'ASK_SHIPMENT_ID',NULL,0,NULL);
+INSERT INTO "chat_messages" VALUES('MSG018','THR011','DRIVER','DRV001','What slots are possible after 1 PM if I reach around 12:45?','2026-08-04T10:02:00+05:30','wa-9011',0,'ASK_SLOT_OPTIONS','2026-08-04T12:45:00+05:30',0,NULL);
+INSERT INTO "chat_messages" VALUES('MSG019','THR012','DRIVER','DRV008','Is my 4 PM slot still active?','2026-08-04T10:12:00+05:30','wa-9012',0,'CHECK_STATUS',NULL,0,NULL);
+INSERT INTO "chat_messages" VALUES('MSG020','THR012','AGENT','agent','The shipment and its appointment were cancelled. Please contact dispatch before travelling.','2026-08-04T10:12:05+05:30',NULL,0,'CANCELLED_SHIPMENT',NULL,0,NULL);
 CREATE TABLE chat_threads (
     thread_id TEXT PRIMARY KEY,
     driver_id TEXT NOT NULL,
@@ -218,8 +224,10 @@ CREATE TABLE chat_threads (
     closed_at TEXT,
     thread_status TEXT NOT NULL
         CHECK (thread_status IN ('OPEN','WAITING_FOR_DRIVER','WAITING_FOR_WAREHOUSE','RESOLVED','ESCALATED','CLOSED')),
+    -- CHOOSE_OPTION added to the original allowed list: app/llm_models.py's
+    -- DriverIntent has 7 values, the original schema only allowed 6.
     thread_intent TEXT NOT NULL
-        CHECK (thread_intent IN ('REPORT_DELAY','ASK_SLOT_OPTIONS','CHECK_STATUS','EARLY_ARRIVAL','GENERAL_QUESTION','UNKNOWN')),
+        CHECK (thread_intent IN ('REPORT_DELAY','ASK_SLOT_OPTIONS','CHECK_STATUS','CHOOSE_OPTION','EARLY_ARRIVAL','GENERAL_QUESTION','UNKNOWN')),
     FOREIGN KEY (driver_id) REFERENCES drivers(driver_id),
     FOREIGN KEY (shipment_id) REFERENCES shipments(shipment_id)
 );
