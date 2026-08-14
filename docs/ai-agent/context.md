@@ -17,11 +17,12 @@ lookup (no hardcoded default) and conversation state persisted via
 the reply). `scripts/concurrency_demo.py` + `tests/test_concurrency.py`
 prove the DB guard under real concurrent access (threads + separate
 connections + a `threading.Barrier`), not just sequential calls. `tests/`
-(pytest, deterministic, no LLM) covers the repository layer and
-`app/conversation.py`'s pure-function helpers.
+(pytest, deterministic, no LLM, 36 tests) covers the repository layer,
+`app/conversation.py`'s orchestration (LLM mocked via monkeypatching
+`app.conversation.extract_intent`) and pure-function helpers, and
+concurrency.
 
-Not built: tests for the conversational layer itself (needs a live LLM
-call), duplicate-message detection, any web/API surface, the optional
+Not built: duplicate-message detection, any web/API surface, the optional
 scheduling-engine extension. Full status: `docs/developer/roadmap.md`.
 
 ## LLM provider
@@ -88,6 +89,19 @@ checking.
   practice: DRV012's seeded THR002 got reused, not duplicated). Ambiguous-
   driver replies (no resolved shipment yet) are deliberately NOT
   persisted -- see architecture.md for why.
+- **"Most recent row" queries break ties with `rowid DESC`, not just a
+  timestamp column.** `record_message`'s timestamps are second-precision,
+  so two turns in the same second tie. If you add another "get the latest
+  X" query, give it the same tiebreaker or it can silently pick the wrong
+  row (this was a real bug, found via `tests/test_repository.py::
+  test_get_last_offered_slot_ids_picks_truly_latest_on_timestamp_tie`).
+- **Seed data is densely interlinked -- pick test fixtures deliberately,
+  not arbitrarily.** Most shipments already have a confirmed appointment
+  (can't accept a new booking); most "chatty" drivers already have a
+  seeded thread (breaks tests that assert an exact/clean message count).
+  `tests/test_conversation.py`'s module docstring lists which
+  driver/shipment has which property; check it (or query fresh) before
+  picking a new one.
 - **`chat_messages.offered_slot_ids` is a column we added**, not part of
   the original provided schema (comma-separated slot_ids, order
   preserved). Existing seed INSERTs were patched to append `,NULL`. If you

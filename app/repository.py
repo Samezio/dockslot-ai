@@ -25,6 +25,11 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 
 def _now_ist_iso() -> str:
+    # Second precision, matching the seed data's timestamp style -- but
+    # this means two writes in the same second (e.g. two turns of a fast
+    # conversation) can get an identical timestamp. Every "most recent
+    # row" query below breaks ties with `rowid DESC`, not timestamp
+    # alone, so ordering stays correct even when timestamps collide.
     return datetime.now(IST).isoformat(timespec="seconds")
 
 
@@ -251,7 +256,7 @@ def get_or_create_open_thread(conn: sqlite3.Connection, driver_id: str, shipment
         SELECT thread_id FROM chat_threads
         WHERE driver_id = ? AND shipment_id = ?
           AND thread_status NOT IN ('RESOLVED', 'CLOSED')
-        ORDER BY opened_at DESC LIMIT 1
+        ORDER BY opened_at DESC, rowid DESC LIMIT 1
         """,
         (driver_id, shipment_id),
     ).fetchone()
@@ -296,7 +301,7 @@ def get_or_create_exception(
     status moves via set_exception_status). Mirrors the 1:1 thread<->
     exception pattern already in the seed data (e.g. THR001/EXC001)."""
     row = conn.execute(
-        "SELECT exception_id FROM driver_exceptions WHERE thread_id = ? ORDER BY reported_at DESC LIMIT 1",
+        "SELECT exception_id FROM driver_exceptions WHERE thread_id = ? ORDER BY reported_at DESC, rowid DESC LIMIT 1",
         (thread_id,),
     ).fetchone()
     if row:
@@ -375,7 +380,7 @@ def get_last_offered_slot_ids(conn: sqlite3.Connection, thread_id: str) -> List[
         """
         SELECT offered_slot_ids FROM chat_messages
         WHERE thread_id = ? AND sender_type = 'AGENT' AND offered_slot_ids IS NOT NULL
-        ORDER BY message_ts DESC LIMIT 1
+        ORDER BY message_ts DESC, rowid DESC LIMIT 1
         """,
         (thread_id,),
     ).fetchone()

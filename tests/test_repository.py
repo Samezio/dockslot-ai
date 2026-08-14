@@ -7,8 +7,11 @@ from app.repository import (
     find_driver_by_phone,
     find_feasible_slots,
     find_shipments_for_driver,
+    get_last_offered_slot_ids,
+    get_or_create_open_thread,
     get_shipment,
     propose_booking,
+    record_message,
 )
 
 
@@ -112,3 +115,15 @@ def test_find_driver_by_phone_unknown_number_returns_none(conn):
 
 def test_find_driver_by_phone_too_short_returns_none(conn):
     assert find_driver_by_phone(conn, "12345") is None
+
+
+def test_get_last_offered_slot_ids_picks_truly_latest_on_timestamp_tie(conn):
+    # record_message's timestamps have only second precision, so two
+    # messages written in the same test (same wall-clock second) can
+    # collide -- the "most recent" query must still pick the actually
+    # latest row (via a rowid tiebreaker), not an arbitrary tied one.
+    thread_id = get_or_create_open_thread(conn, "DRV010", "SHP1010")
+    record_message(conn, thread_id, "AGENT", "older options", offered_slot_ids=["SLOT-A", "SLOT-B"])
+    record_message(conn, thread_id, "AGENT", "newer options", offered_slot_ids=["SLOT-C", "SLOT-D"])
+
+    assert get_last_offered_slot_ids(conn, thread_id) == ["SLOT-C", "SLOT-D"]

@@ -207,6 +207,22 @@ handling). `scripts/demo.py`, `scripts/concurrency_demo.py`, and
 watching what happens, not a substitute for `pytest`. Run: `pytest -q`
 (needs `requirements-dev.txt`).
 
+`tests/test_conversation.py` covers `app/conversation.py`'s orchestration
+by monkeypatching `app.conversation.extract_intent` to return a canned
+`DriverMessageIntent` -- everything downstream (persistence, option
+matching, escalation, booking) runs for real, no LLM call needed. Includes
+the direct regression test for the ordinal-drift bug the persistence
+layer fixed (`test_choose_option_resolves_against_persisted_list_not_
+fresh_recompute`): books nothing rather than silently booking whatever a
+fresh recompute would now put first.
+
+Writing tests here surfaced a real bug: `get_last_offered_slot_ids` (and
+the other "most recent row" queries) ordered by timestamp alone, but
+`record_message`'s timestamps are second-precision -- two turns in the
+same second tie, and ties aren't guaranteed to break in insertion order.
+Fixed with an explicit `rowid DESC` tiebreaker on every such query in
+`app/repository.py`.
+
 ## Not built yet
 
 - Any web/API surface (FastAPI etc.) -- deferred until there's a reason to
