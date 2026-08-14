@@ -116,6 +116,15 @@ together), not just sequential calls. Offline/deterministic -- no API key
 needed. Rebuilds `data/dockslot.db` itself (twice, once per scenario), so
 don't run it against a DB state you care about keeping.
 
+```powershell
+python scripts\scheduling_demo.py
+```
+
+`scripts/scheduling_demo.py` runs the optional facility-wide scheduling
+engine (`app/scheduling.py`) against the real seeded Jaipur facility and
+prints the whole-day proposed dock schedule. Offline/deterministic -- no
+API key needed, needs `ortools` installed (in `requirements.txt`).
+
 ## Automated tests
 
 ```powershell
