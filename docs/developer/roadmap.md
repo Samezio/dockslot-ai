@@ -42,12 +42,39 @@ sources (`dock_status_events`, `facility_checkins`) can describe the same
 real-world dock unavailability, and feeding both to the solver as
 separate hard blocks made the whole model `INFEASIBLE`.
 
+## MVP 5 -- REST API + UI (done)
+
+`app/api.py` (FastAPI): `POST /identify` (phone -> driver + shipments),
+`POST /chat` (one turn of `handle_driver_message`), `GET
+/schedule/{facility_id}` (the scheduling engine, on demand -- **not**
+auto-triggered from `/chat`, a deliberate boundary, see
+architecture.md). `web/index.html`: a single self-contained static page
+(vanilla JS, no framework/build step) driving all three. No
+authentication -- local/dev tool, same as everything else so far. Run:
+`python scripts/serve.py`, open `http://127.0.0.1:8000`.
+`tests/test_api.py` covers the HTTP wiring (57 tests total now; LLM
+mocked out, same approach as `test_conversation.py`).
+
+Also added this session: an `ollama` LLM provider entry (`app/llm.py`)
+for local dev testing against a local model -- no API key, no cost. Dev
+tool only, not a production option.
+
+## Known issues (found, not yet fixed)
+
+A deep review after the API/UI landed turned up 5 confirmed bugs and 8
+smaller gaps -- all reproduced, none fixed yet. See
+[known-issues/](known-issues/README.md). The two worth knowing before
+demoing anything: multi-shipment drivers can't use the chat at all
+(including DRV006, the phone number the UI suggests), and the scheduler's
+proposals both move confirmed appointments and mostly can't be booked.
+
 ## Not built yet
 
-- Any web/API surface (FastAPI etc.)
+- Authentication on the REST API.
 - Wiring `app/scheduling.py` into the live chat flow (e.g. a driver's
-  message triggering a facility-wide recompute) -- currently a
-  standalone tool, called on demand.
+  message triggering a facility-wide recompute) -- currently called on
+  demand, either via `scripts/scheduling_demo.py` or `GET
+  /schedule/{facility_id}`, never automatically from `/chat`.
 - Live-LLM correctness testing (does the model actually classify messages right) stays manual, via `scripts/chat_demo.py` / `scripts/chat.py` -- automated tests mock the LLM call by design, see architecture.md
 
 ## Against the PDF brief
@@ -56,8 +83,8 @@ Everything in the brief is built and tested: §7.1 (one driver), §7.2
 (many drivers / concurrent requests), §7.3 (the optional facility-wide
 scheduling engine), §9.3 (human control -- no-feasible-slot escalation,
 no silent guessing), and §11.2 (duplicate-message handling). Nothing from
-the brief's in-scope requirements remains; what's left (a web/API
-surface, live-LLM test automation) is infrastructure around the brief,
-not content from it.
+the brief's in-scope requirements remains. What's left (API
+authentication, live-LLM test automation) is infrastructure around the
+brief, not content from it.
 
 See `docs/developer/architecture.md` for how each piece works.

@@ -281,6 +281,57 @@ unscheduled (`SHP1015`) is *independently* the same shipment
 case THR005), a good cross-check that both layers agree. See
 `tests/test_scheduling.py` and `scripts/scheduling_demo.py`.
 
+## REST API + UI (`app/api.py`, `web/index.html`)
+
+A thin HTTP wrapper over everything above -- FastAPI, per CLAUDE.md
+section 13's default for REST APIs. It adds no business logic: every
+route calls straight into `app/repository.py`, `app/conversation.py`, or
+`app/scheduling.py`, the same functions `scripts/chat.py` and
+`scripts/scheduling_demo.py` already used. Request/response shapes are
+explicit Pydantic models in `app/api_schemas.py`, kept separate from the
+routes the same way `app/llm_models.py` is kept separate from
+`app/intent.py`.
+
+Endpoints:
+
+- `POST /identify` -- phone number -> driver + their active shipments.
+  Same identity check as `scripts/chat.py` (no hardcoded default driver).
+- `POST /chat` -- `{driver_id, message}` -> one turn of
+  `handle_driver_message`. `driver_id` must come from a prior `/identify`
+  call; the route only checks it's a real driver_id (`app/repository.py::
+  get_driver`), it doesn't re-verify phone ownership.
+- `GET /schedule/{facility_id}` -- runs `app/scheduling.py` on demand and
+  returns the proposed whole-day dock assignment. Read-only; doesn't
+  write anything. **Deliberately not auto-triggered from `/chat`** -- a
+  driver's message still only affects that one shipment
+  (`find_feasible_slots`), exactly as before. Wiring scheduling into the
+  live chat flow (e.g. every driver message triggering a facility-wide
+  recompute) would be a materially different, heavier behavior and stays
+  a real design decision for later, not something this endpoint does
+  implicitly.
+- `GET /` serves `web/index.html`, a single self-contained static page
+  (vanilla JS, no build step, no framework) that drives all three
+  endpoints: identify -> chat transcript -> optional facility-schedule
+  view.
+
+**No authentication.** This is a local/dev tool like the rest of the
+project so far -- `driver_id` isn't cryptographically tied to the phone
+number that produced it, and there's no session/token layer. Fine for
+local use; would need real auth before being reachable from an untrusted
+network.
+
+**DB access**: one `sqlite3` connection per request
+(`app/api.py::get_db`, a FastAPI dependency) rather than a shared
+connection -- simplest option for a single-process dev tool, and
+consistent with the existing principle that the DB's own partial unique
+indexes are the concurrency guard, not anything in application code.
+
+Run: `python scripts/serve.py`, then open `http://127.0.0.1:8000`. See
+`docs/developer/development.md` for details.
+`tests/test_api.py` covers the HTTP wiring (status codes, dependency
+override to a temp-file test DB, LLM mocked out same as
+`test_conversation.py`) -- not business logic, already covered elsewhere.
+
 ## Automated tests
 
 `tests/` -- pytest, deterministic only (no LLM calls, no network). Each
@@ -316,15 +367,13 @@ Jaipur facility (including the merged-fixed-occupancy fix above).
 
 ## Not built yet
 
-- Any web/API surface (FastAPI etc.) -- deferred until there's a reason to
-  serve this over HTTP (e.g. a real chat channel) rather than call it
-  in-process.
-- `app/scheduling.py` is not wired into `app/conversation.py`'s
-  per-message flow -- it's a standalone tool, called on demand. Hooking
-  it up (e.g. a driver's message triggers a facility-wide recompute
-  instead of just its own `find_feasible_slots` view) is a real design
-  decision -- see the module docstring for why it's deliberately kept
-  separate for now.
+- Authentication on the REST API -- see "REST API + UI" above.
+- `app/scheduling.py` is still not auto-triggered from
+  `app/conversation.py`'s per-message flow -- it's called on demand, now
+  via `GET /schedule/{facility_id}` as well as
+  `scripts/scheduling_demo.py`. Auto-triggering it from a driver's
+  message is a real design decision -- see the module docstring for why
+  it's deliberately kept separate for now.
 - Live-LLM correctness testing (does the model actually classify
   messages right) stays manual, via `scripts/chat_demo.py` /
   `scripts/chat.py` -- automated tests mock the LLM call by design (see

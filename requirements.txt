@@ -16,3 +16,8 @@ python-dotenv==1.2.1
 # Optional facility-wide scheduling engine (app/scheduling.py, brief
 # section 7.3). Used offline/deterministically -- no network calls.
 ortools==9.15.6755
+
+# REST API + UI (app/api.py, web/index.html). CLAUDE.md section 13
+# names FastAPI as the default for REST APIs.
+fastapi==0.128.8
+uvicorn==0.39.0

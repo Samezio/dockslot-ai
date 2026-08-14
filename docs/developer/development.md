@@ -125,6 +125,18 @@ engine (`app/scheduling.py`) against the real seeded Jaipur facility and
 prints the whole-day proposed dock schedule. Offline/deterministic -- no
 API key needed, needs `ortools` installed (in `requirements.txt`).
 
+```powershell
+python scripts\serve.py
+```
+
+`scripts/serve.py` runs the REST API + UI (`app/api.py`, `web/index.html`)
+with uvicorn. Open `http://127.0.0.1:8000` in a browser: identify by
+phone, chat, and optionally load a facility's proposed schedule.
+`/identify` and `/schedule/*` are offline/deterministic; `/chat` calls a
+real LLM per message, same as `chat.py`. No authentication -- local dev
+tool only. For auto-reload while editing `app/api.py`, run
+`uvicorn app.api:app --reload` directly instead.
+
 ## Automated tests
 
 ```powershell
