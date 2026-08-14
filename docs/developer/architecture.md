@@ -187,7 +187,7 @@ one.
 Swapping providers is a config change, not a code change:
 
 ```
-LLM_PROVIDER=google_genai   # default; also supports: openai, openrouter
+LLM_PROVIDER=google_genai   # default; also: openai, openrouter, aicredit, ollama
 ```
 
 `get_chat_model()` reads `LLM_PROVIDER` (or an explicit argument) and
