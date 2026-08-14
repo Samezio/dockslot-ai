@@ -13,6 +13,11 @@ langchain-openai==0.3.35
 pydantic==2.13.4
 python-dotenv==1.2.1
 
+# Local dev only -- backs the "ollama" provider in app/llm.py (no API key,
+# no cost, runs against a local Ollama server). Not needed for
+# google_genai/openai/openrouter.
+langchain-ollama==0.3.10
+
 # Optional facility-wide scheduling engine (app/scheduling.py, brief
 # section 7.3). Used offline/deterministically -- no network calls.
 ortools==9.15.6755

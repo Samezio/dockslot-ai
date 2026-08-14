@@ -73,6 +73,12 @@ checking first). `OPENAI_API_KEY` is present in `.env` but that key has no
 credits yet, per the developer -- don't assume `openai` works without
 checking.
 
+`ollama` is a fourth provider, **local dev only** -- runs against a local
+Ollama server (`qwen3:8b`), no API key, no cost. Verified live. Don't
+treat it as a production option or suggest deploying against it; it's
+there purely so the developer can iterate without spending real provider
+credits.
+
 ## Conventions established so far
 
 - **Business logic vs AI orchestration stays separated** (CLAUDE.md
