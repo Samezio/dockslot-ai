@@ -98,6 +98,16 @@ above) and will incur provider API cost/latency each run.
 python scripts\chat.py [DRIVER_ID]
 ```
 
+```powershell
+python scripts\concurrency_demo.py
+```
+
+`scripts/concurrency_demo.py` proves the DB's concurrency guard under real
+concurrent access (separate threads/connections synchronized to fire
+together), not just sequential calls. Offline/deterministic -- no API key
+needed. Rebuilds `data/dockslot.db` itself (twice, once per scenario), so
+don't run it against a DB state you care about keeping.
+
 `scripts/chat.py` is the actual interactive way to use this -- an
 in-terminal chat loop. It asks for your phone number and looks you up
 (no default driver -- mirrors how a real channel like WhatsApp would

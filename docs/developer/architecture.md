@@ -174,15 +174,25 @@ that key has limited credits -- raise/remove once it's not a shared
 low-credit dev key. See `.env.example` for the full set of variables
 `app/llm.py` recognizes.
 
+## Multi-driver concurrency proof
+
+`scripts/concurrency_demo.py` -- separate threads, separate DB
+connections, synchronized with a `threading.Barrier` so they call
+`propose_booking()`/`find_feasible_slots()` at the same instant, not
+sequentially. Two scenarios: N threads forced onto one exact slot (the
+mechanical proof), and 5 threads each independently asking "what's my
+best slot after 18:00?" -- the brief's own §7.2 example ("five drivers
+may ask for a 6:00 PM window when only one compatible dock is free").
+Outcomes vary run to run (it's a real race), but every genuine collision
+resolves to exactly one winner, verified by querying `appointments`
+directly afterward -- not by trusting the Python-level return values.
+No LLM involved.
+
 ## Not built yet
 
 - `driver_exceptions` persistence -- `chat_threads`/`chat_messages` are
   wired up (see above); the exception-level record (type, severity,
   dedupe key) isn't yet.
-- Multi-driver concurrency proof -- a script that fires simultaneous
-  requests at the same slot from separate threads/connections, not just
-  sequential calls in one script (the brief's actual "many drivers"
-  challenge, §7.2).
 - Any web/API surface (FastAPI etc.) -- deferred until there's a reason to
   serve this over HTTP (e.g. a real chat channel) rather than call it
   in-process.

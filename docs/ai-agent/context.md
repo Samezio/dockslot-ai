@@ -13,9 +13,12 @@ Built: the deterministic operational layer (`app/db.py`, `app/models.py`,
 lookup (no hardcoded default) and conversation state persisted via
 `chat_threads`/`chat_messages` (see architecture.md).
 
-Not built: `driver_exceptions` persistence, a real multi-driver concurrency
-proof, any web/API surface, automated tests, the optional scheduling-engine
-extension.
+And `scripts/concurrency_demo.py`: proves the DB guard under real
+concurrent access (threads + separate connections + a `threading.Barrier`),
+not just sequential calls.
+
+Not built: `driver_exceptions` persistence, any web/API surface, automated
+tests, the optional scheduling-engine extension.
 
 ## LLM provider
 
