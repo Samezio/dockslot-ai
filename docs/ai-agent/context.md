@@ -101,6 +101,20 @@ already happened once.
   indexes in `db/schema_and_seed.sql` already do this (see architecture.md
   for details). If a booking write fails, catch `sqlite3.IntegrityError`
   and turn it into a `BookingResult`, the way `propose_booking()` does.
+- **A second booking for a shipment is a RESCHEDULE, not a duplicate.**
+  `propose_booking` claims the new slot (`is_current = 0`) *before*
+  cancelling the old appointment, then promotes the new row. Don't
+  "simplify" that to cancel-then-book: the current order is what
+  guarantees a driver who loses the race for the new slot still keeps the
+  appointment they had. This was broken for 78% of active shipments until
+  fixed, and an older test actively asserted the broken behavior -- see
+  architecture.md "Rescheduling".
+- **Never re-check availability with `slot_id in find_feasible_slots(...)`.**
+  That call is windowed (`after_ts`) and capped (`limit`), so an
+  available-but-late slot reads as unavailable. Use
+  `is_slot_available_for(conn, shipment_id, slot_id)`, which asks about
+  that one slot. (Real bug: reschedules to a late slot always failed with
+  "no longer available".)
 - **`data/dockslot.db` is generated, never hand-edited.** It's gitignored.
   Change `db/schema_and_seed.sql` and rerun `scripts/build_db.py`.
 - **Dataclasses for structured DB data, Pydantic reserved for LLM-output

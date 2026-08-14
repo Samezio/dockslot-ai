@@ -36,6 +36,7 @@ def _now_ist_iso() -> str:
 def _row_to_shipment_summary(row: sqlite3.Row) -> ShipmentSummary:
     return ShipmentSummary(
         shipment_id=row["shipment_id"],
+        order_reference=row["order_reference"],
         driver_id=row["driver_id"],
         destination_facility_id=row["destination_facility_id"],
         required_dock_type=row["required_dock_type"],
@@ -113,10 +114,12 @@ def find_shipments_for_driver(conn: sqlite3.Connection, driver_id: str) -> List[
     """
     rows = conn.execute(
         """
-        SELECT * FROM v_inbound_operational_state
-        WHERE driver_id = ?
-          AND current_status NOT IN ('COMPLETED', 'CANCELLED')
-        ORDER BY effective_eta_ts
+        SELECT v.*, s.order_reference
+        FROM v_inbound_operational_state v
+        JOIN shipments s ON s.shipment_id = v.shipment_id
+        WHERE v.driver_id = ?
+          AND v.current_status NOT IN ('COMPLETED', 'CANCELLED')
+        ORDER BY v.effective_eta_ts
         """,
         (driver_id,),
     ).fetchall()
@@ -125,10 +128,31 @@ def find_shipments_for_driver(conn: sqlite3.Connection, driver_id: str) -> List[
 
 def get_shipment(conn: sqlite3.Connection, shipment_id: str) -> Optional[ShipmentSummary]:
     row = conn.execute(
-        "SELECT * FROM v_inbound_operational_state WHERE shipment_id = ?",
+        """
+        SELECT v.*, s.order_reference
+        FROM v_inbound_operational_state v
+        JOIN shipments s ON s.shipment_id = v.shipment_id
+        WHERE v.shipment_id = ?
+        """,
         (shipment_id,),
     ).fetchone()
     return _row_to_shipment_summary(row) if row else None
+
+
+def find_open_thread_shipment_ids(conn: sqlite3.Connection, driver_id: str) -> List[str]:
+    """Shipments this driver already has an open conversation about.
+
+    Used to continue an in-progress exchange when a follow-up message
+    ("can reach at 9:00") carries no shipment reference of its own.
+    """
+    rows = conn.execute(
+        """
+        SELECT DISTINCT shipment_id FROM chat_threads
+        WHERE driver_id = ? AND thread_status NOT IN ('RESOLVED', 'CLOSED')
+        """,
+        (driver_id,),
+    ).fetchall()
+    return [row["shipment_id"] for row in rows]
 
 
 def _last_new_start_time(conn: sqlite3.Connection, facility_id: str) -> Optional[str]:
@@ -218,22 +242,93 @@ def find_feasible_slots(
     return options
 
 
+def is_slot_available_for(conn: sqlite3.Connection, shipment_id: str, slot_id: str) -> bool:
+    """Is this ONE specific slot still open and compatible for this shipment?
+
+    Deliberately not implemented as `slot_id in find_feasible_slots(...)`:
+    that call is windowed (`after_ts`) and capped (`limit`), so a slot that
+    is perfectly available but sits outside the window -- or beyond the
+    first N results -- reads as unavailable. That produced a real bug: a
+    driver offered a 16:00 slot was told it was "no longer available"
+    purely because the re-check searched from the shipment's stored ETA
+    and stopped after 10 rows. Availability of a known slot is a question
+    about that slot, not about a ranked list.
+    """
+    shipment = get_shipment(conn, shipment_id)
+    if shipment is None:
+        return False
+
+    row = conn.execute(
+        "SELECT * FROM v_slot_availability WHERE slot_id = ?", (slot_id,)
+    ).fetchone()
+    if row is None or row["availability_status"] != "AVAILABLE":
+        return False
+    if row["facility_id"] != shipment.destination_facility_id:
+        return False
+    if shipment.required_dock_type != "ANY" and row["dock_type"] != shipment.required_dock_type:
+        return False
+    if shipment.temperature_control_required and not row["supports_refrigerated"]:
+        return False
+    if row["max_vehicle_weight_kg"] < shipment.load_weight_kg:
+        return False
+    if _slot_duration_min(row["slot_start_ts"], row["slot_end_ts"]) < shipment.expected_unload_min:
+        return False
+    return True
+
+
+_ACTIVE_APPOINTMENT_STATUSES = ("PENDING_CONFIRMATION", "CONFIRMED", "IN_PROGRESS")
+
+
+def get_current_appointment_id(conn: sqlite3.Connection, shipment_id: str) -> Optional[str]:
+    """The shipment's active appointment, if it has one."""
+    row = conn.execute(
+        """
+        SELECT appointment_id FROM appointments
+        WHERE shipment_id = ? AND is_current = 1
+          AND appointment_status IN ('PENDING_CONFIRMATION','CONFIRMED','IN_PROGRESS')
+        ORDER BY booked_at DESC, rowid DESC LIMIT 1
+        """,
+        (shipment_id,),
+    ).fetchone()
+    return row["appointment_id"] if row else None
+
+
 def propose_booking(
     conn: sqlite3.Connection,
     shipment_id: str,
     slot_id: str,
     booking_source: str = "DRIVER_CHAT",
 ) -> BookingResult:
-    """Attempt to hold a slot for a shipment.
+    """Attempt to hold a slot for a shipment, rescheduling if it already
+    has an appointment.
 
     Writes PENDING_CONFIRMATION, not CONFIRMED: per the brief, showing an
     option, holding it and a warehouse confirming it are three different
     states. SQLite's partial unique indexes are the actual concurrency
     guard -- this function just surfaces the outcome cleanly instead of
     letting a driver-facing caller see a raw IntegrityError.
+
+    Rescheduling (the common case -- a delayed driver moving their slot)
+    claims the NEW slot before releasing the old one, in one transaction:
+
+        1. INSERT the new appointment with is_current = 0. This still hits
+           ux_active_appointment_per_slot, so the race for the new slot is
+           decided here -- but it does NOT hit
+           ux_current_active_appointment_per_shipment, which only covers
+           is_current = 1 rows, so the old appointment can coexist for the
+           moment in between.
+        2. Only once that succeeded, CANCEL the old appointment (which
+           frees its slot for everyone else).
+        3. Promote the new row to is_current = 1.
+
+    Order matters: if the new slot is lost to another driver at step 1,
+    steps 2 and 3 never run and the driver keeps the appointment they
+    already had. Releasing first would leave them with nothing.
     """
     appointment_id = "APT-{}".format(uuid.uuid4().hex[:10].upper())
     now = _now_ist_iso()
+    replaced_id = get_current_appointment_id(conn, shipment_id)
+
     try:
         conn.execute(
             """
@@ -242,19 +337,50 @@ def propose_booking(
                 booking_source, is_current, booked_at, confirmed_at,
                 cancelled_at, cancellation_reason, replaced_appointment_id,
                 warehouse_confirmation_ref, updated_at
-            ) VALUES (?, ?, ?, 'PENDING_CONFIRMATION', ?, 1, ?, NULL, NULL, NULL, NULL, NULL, ?)
+            ) VALUES (?, ?, ?, 'PENDING_CONFIRMATION', ?, ?, ?, NULL, NULL, NULL, ?, NULL, ?)
             """,
-            (appointment_id, shipment_id, slot_id, booking_source, now, now),
+            (
+                appointment_id,
+                shipment_id,
+                slot_id,
+                booking_source,
+                0 if replaced_id else 1,
+                now,
+                replaced_id,
+                now,
+            ),
         )
+
+        if replaced_id:
+            conn.execute(
+                """
+                UPDATE appointments
+                SET appointment_status = 'CANCELLED', is_current = 0,
+                    cancelled_at = ?, cancellation_reason = ?, updated_at = ?
+                WHERE appointment_id = ?
+                """,
+                (now, "Rescheduled by driver to slot {}".format(slot_id), now, replaced_id),
+            )
+            conn.execute(
+                "UPDATE appointments SET is_current = 1, updated_at = ? WHERE appointment_id = ?",
+                (now, appointment_id),
+            )
+
         conn.commit()
-        return BookingResult(success=True, appointment_id=appointment_id, reason=None)
+        return BookingResult(
+            success=True, appointment_id=appointment_id, reason=None, replaced_appointment_id=replaced_id
+        )
     except sqlite3.IntegrityError as exc:
         conn.rollback()
         message = str(exc)
         if "appointments.slot_id" in message:
             reason = "That slot was just taken by another driver's request."
         elif "appointments.shipment_id" in message:
-            reason = "This shipment already has an active appointment."
+            # Shouldn't happen now that rescheduling is handled above --
+            # if it does, the shipment has more than one active
+            # appointment, which is a data problem worth surfacing loudly
+            # rather than papering over.
+            reason = "This shipment already has an active appointment that could not be replaced."
         else:
             reason = "Booking rejected: {}".format(message)
         return BookingResult(success=False, appointment_id=None, reason=reason)

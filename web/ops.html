@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dockslot-ai — dispatcher</title>
+<style>
+  :root {
+    --bg: #0f172a; --panel: #1e293b; --border: #334155;
+    --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8;
+    --accent-text: #0f172a; --error: #f87171; --warn: #fbbf24;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+    background: var(--bg); color: var(--text);
+    display: flex; flex-direction: column; align-items: center;
+    min-height: 100vh; padding: 24px 12px;
+  }
+  h1 { font-size: 1.25rem; margin: 0 0 4px; }
+  .subtitle { color: var(--muted); font-size: 0.85rem; margin-bottom: 20px; }
+  main { width: 100%; max-width: 900px; display: flex; flex-direction: column; gap: 16px; }
+  section {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px;
+  }
+  label { font-size: 0.85rem; color: var(--muted); display: block; margin-bottom: 4px; }
+  input[type=text] {
+    width: 100%; padding: 8px 10px; border-radius: 6px;
+    border: 1px solid var(--border); background: #0b1220;
+    color: var(--text); font-size: 0.95rem;
+  }
+  .row { display: flex; gap: 8px; align-items: flex-end; }
+  .row > div { flex: 1; }
+  button {
+    padding: 8px 16px; border-radius: 6px; border: none;
+    background: var(--accent); color: var(--accent-text);
+    font-weight: 600; cursor: pointer; font-size: 0.9rem;
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button:hover:not(:disabled) { filter: brightness(1.1); }
+  .hint { font-size: 0.8rem; color: var(--muted); margin-top: 8px; }
+  .error { color: var(--error); font-size: 0.85rem; margin-top: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-top: 12px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+  .manual { color: var(--warn); }
+  .changed { color: var(--warn); font-size: 0.8rem; }
+  .unscheduled { margin-top: 12px; font-size: 0.85rem; color: var(--muted); }
+  .banner {
+    background: #422006; border: 1px solid #854d0e; color: #fde68a;
+    border-radius: 8px; padding: 10px 12px; font-size: 0.82rem; margin-bottom: 16px;
+  }
+  .footer-link { margin-top: 20px; font-size: 0.8rem; color: var(--muted); }
+  .footer-link a { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<h1>dockslot-ai — dispatcher view</h1>
+<div class="subtitle">Facility-wide dock schedule proposal · not a driver-facing page</div>
+
+<main>
+  <div class="banner">
+    <strong>Advisory only.</strong> This is a proposal, not a booking. Most
+    proposed times do not correspond to a bookable slot, and the proposal may
+    move appointments that are already confirmed — see
+    <code>docs/developer/known-issues/</code> (issues 02 and 03) before acting on it.
+  </div>
+
+  <section>
+    <div class="row">
+      <div>
+        <label for="facilityId">Facility ID</label>
+        <input type="text" id="facilityId" value="FAC-JAI-01">
+      </div>
+      <button id="scheduleBtn">Load schedule</button>
+    </div>
+    <div id="scheduleError" class="error"></div>
+    <div id="scheduleResult"></div>
+  </section>
+</main>
+
+<div class="footer-link">
+  Driver chat is at <a href="/">/</a>.
+</div>
+
+<script>
+const facilityIdInput = document.getElementById('facilityId');
+const scheduleBtn = document.getElementById('scheduleBtn');
+const scheduleError = document.getElementById('scheduleError');
+const scheduleResult = document.getElementById('scheduleResult');
+
+const fmt = m => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+
+function cell(row, text, cls) {
+  const td = document.createElement('td');
+  td.textContent = text;
+  if (cls) td.className = cls;
+  row.appendChild(td);
+}
+
+async function loadSchedule() {
+  scheduleError.textContent = '';
+  scheduleResult.textContent = '';
+  const facilityId = facilityIdInput.value.trim();
+  if (!facilityId) return;
+  scheduleBtn.disabled = true;
+  scheduleBtn.textContent = 'Solving...';
+  try {
+    const res = await fetch('/schedule/' + encodeURIComponent(facilityId));
+    const body = await res.json();
+    if (!res.ok) {
+      scheduleError.textContent = body.detail || 'Failed to load schedule.';
+      return;
+    }
+
+    const summary = document.createElement('div');
+    summary.className = 'hint';
+    summary.textContent = 'Solver status: ' + body.status +
+      (body.objective_value !== null ? ' · objective ' + body.objective_value : '') +
+      ' · ' + body.assignments.length + ' scheduled';
+    scheduleResult.appendChild(summary);
+
+    if (body.assignments.length) {
+      const table = document.createElement('table');
+      const thead = document.createElement('thead');
+      const hr = document.createElement('tr');
+      ['Shipment', 'Dock', 'Start', 'End', ''].forEach(h => {
+        const th = document.createElement('th');
+        th.textContent = h;
+        hr.appendChild(th);
+      });
+      thead.appendChild(hr);
+      table.appendChild(thead);
+
+      const tbody = document.createElement('tbody');
+      body.assignments
+        .slice()
+        .sort((a, b) => a.start_minutes - b.start_minutes)
+        .forEach(a => {
+          const tr = document.createElement('tr');
+          cell(tr, a.shipment_id);
+          cell(tr, a.dock_id);
+          cell(tr, fmt(a.start_minutes));
+          cell(tr, fmt(a.end_minutes));
+          cell(tr, a.needs_manual_approval ? 'manual approval' : '', 'manual');
+          tbody.appendChild(tr);
+        });
+      table.appendChild(tbody);
+      scheduleResult.appendChild(table);
+    }
+
+    if (body.unscheduled_shipment_ids.length) {
+      const div = document.createElement('div');
+      div.className = 'unscheduled';
+      div.textContent = 'Not scheduled today: ' + body.unscheduled_shipment_ids.join(', ');
+      scheduleResult.appendChild(div);
+    }
+  } catch (e) {
+    scheduleError.textContent = 'Request failed: ' + e;
+  } finally {
+    scheduleBtn.disabled = false;
+    scheduleBtn.textContent = 'Load schedule';
+  }
+}
+
+scheduleBtn.addEventListener('click', loadSchedule);
+</script>
+</body>
+</html>
