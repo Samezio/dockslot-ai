@@ -10,6 +10,7 @@ from app.repository import (
     get_last_offered_slot_ids,
     get_or_create_open_thread,
     get_shipment,
+    is_recent_duplicate_message,
     propose_booking,
     record_message,
 )
@@ -127,3 +128,17 @@ def test_get_last_offered_slot_ids_picks_truly_latest_on_timestamp_tie(conn):
     record_message(conn, thread_id, "AGENT", "newer options", offered_slot_ids=["SLOT-C", "SLOT-D"])
 
     assert get_last_offered_slot_ids(conn, thread_id) == ["SLOT-C", "SLOT-D"]
+
+
+def test_is_recent_duplicate_message_detects_exact_repeat_ignoring_case_and_whitespace(conn):
+    thread_id = get_or_create_open_thread(conn, "DRV010", "SHP1010")
+    record_message(conn, thread_id, "DRIVER", "Traffic delay, ETA 12:45")
+
+    assert is_recent_duplicate_message(conn, thread_id, "Traffic delay, ETA 12:45") is True
+    assert is_recent_duplicate_message(conn, thread_id, "  TRAFFIC delay,   ETA 12:45  ") is True
+    assert is_recent_duplicate_message(conn, thread_id, "Different message entirely") is False
+
+
+def test_is_recent_duplicate_message_false_with_no_prior_driver_message(conn):
+    thread_id = get_or_create_open_thread(conn, "DRV010", "SHP1010")
+    assert is_recent_duplicate_message(conn, thread_id, "hello") is False

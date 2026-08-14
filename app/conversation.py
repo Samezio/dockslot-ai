@@ -30,6 +30,7 @@ from app.repository import (
     get_or_create_exception,
     get_or_create_open_thread,
     get_slots_by_ids,
+    is_recent_duplicate_message,
     propose_booking,
     record_message,
     set_exception_status,
@@ -134,6 +135,16 @@ def handle_driver_message(conn, driver_id: str, message_text: str) -> str:
 
     shipment = shipments[0]
     thread_id = get_or_create_open_thread(conn, driver_id, shipment.shipment_id)
+
+    if is_recent_duplicate_message(conn, thread_id, message_text):
+        # A messaging retry from weak connectivity (brief section 11.2) --
+        # record it as a duplicate and acknowledge without re-running the
+        # LLM or touching exception/thread status: nothing new was said.
+        record_message(conn, thread_id, "DRIVER", message_text, is_duplicate=True)
+        reply = "Got it -- I'm already looking into your last message, no need to resend."
+        record_message(conn, thread_id, "AGENT", reply)
+        return reply
+
     record_message(conn, thread_id, "DRIVER", message_text)
 
     intent = extract_intent(message_text, shipment_context=_shipment_context_text(shipment))

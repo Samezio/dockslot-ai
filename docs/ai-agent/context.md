@@ -16,14 +16,16 @@ lookup (no hardcoded default) and conversation state persisted via
 `driver_exceptions` is wired up too (one record per thread, status mirrors
 the reply). `scripts/concurrency_demo.py` + `tests/test_concurrency.py`
 prove the DB guard under real concurrent access (threads + separate
-connections + a `threading.Barrier`), not just sequential calls. `tests/`
-(pytest, deterministic, no LLM, 36 tests) covers the repository layer,
-`app/conversation.py`'s orchestration (LLM mocked via monkeypatching
-`app.conversation.extract_intent`) and pure-function helpers, and
-concurrency.
+connections + a `threading.Barrier`), not just sequential calls.
+Duplicate-message detection (`is_recent_duplicate_message`) catches an
+exact repeat within a still-open thread and skips the LLM call entirely.
+`tests/` (pytest, deterministic, no LLM, 40 tests) covers the repository
+layer, `app/conversation.py`'s orchestration (LLM mocked via
+monkeypatching `app.conversation.extract_intent`) and pure-function
+helpers, and concurrency.
 
-Not built: duplicate-message detection, any web/API surface, the optional
-scheduling-engine extension. Full status: `docs/developer/roadmap.md`.
+Not built: any web/API surface, the optional scheduling-engine extension.
+Full status: `docs/developer/roadmap.md`.
 
 ## LLM provider
 
@@ -95,6 +97,13 @@ checking.
   X" query, give it the same tiebreaker or it can silently pick the wrong
   row (this was a real bug, found via `tests/test_repository.py::
   test_get_last_offered_slot_ids_picks_truly_latest_on_timestamp_tie`).
+- **Duplicate detection is checked before calling the LLM, not after.**
+  `is_recent_duplicate_message` runs on the raw message text, in
+  `handle_driver_message`, before `extract_intent` -- a detected duplicate
+  short-circuits entirely (no LLM call, no exception/thread status
+  change). Only applies within a thread that's still open; a retry after
+  the thread resolved starts a fresh thread instead (known limitation,
+  see architecture.md).
 - **Seed data is densely interlinked -- pick test fixtures deliberately,
   not arbitrarily.** Most shipments already have a confirmed appointment
   (can't accept a new booking); most "chatty" drivers already have a

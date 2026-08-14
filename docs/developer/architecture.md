@@ -157,6 +157,31 @@ the shipment's `priority_code`) are set once at first report;
 1:1 with the reply actually given (`SLOT_OPTIONS_SHARED`,
 `WAITING_CONFIRMATION`, `RESOLVED`, `ESCALATED`, `NEEDS_INFORMATION`).
 
+### Duplicate-message detection
+
+Brief §11.2: "a driver sends duplicate messages because of weak
+connectivity" (seed case THR001/THR009 -- a retry spawned a whole second
+thread there). Our thread-per-(driver,shipment) reuse already prevents
+that specific failure mode; the remaining case is the same message
+arriving twice within one still-open thread.
+`app/repository.py::is_recent_duplicate_message` checks the thread's last
+DRIVER message: same text (normalized for case/whitespace) within 5
+minutes = duplicate. `app/conversation.py` checks this **before** calling
+`extract_intent` -- a detected duplicate is recorded
+(`chat_messages.is_duplicate = 1`) and acknowledged with a canned reply,
+skipping the LLM call entirely (cost/latency win, and nothing new was
+actually said) and leaving thread/exception status untouched.
+
+Known limitation: dedup only applies within an open thread. If the first
+reply already resolved the thread (`get_or_create_open_thread` only
+reuses threads not in `RESOLVED`/`CLOSED`), an identical retry starts a
+fresh thread rather than being flagged -- observed live: asking the same
+already-answered "still fits, no change needed" question twice created
+two separate (harmless, but undeduplicated) threads. Worth revisiting if
+it turns out to matter in practice; not fixed now since duplicating a
+resolved answer is low-cost, unlike duplicating an open, LLM-processed
+one.
+
 ### Provider abstraction (`app/llm.py`)
 
 Swapping providers is a config change, not a code change:
