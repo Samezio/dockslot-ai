@@ -13,9 +13,9 @@ just attempts the write and reports whether SQLite accepted it.
 import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import Dict, List, Optional
 
-from app.models import BookingResult, ShipmentSummary, SlotOption
+from app.models import BookingResult, Driver, ShipmentSummary, SlotOption
 
 # Fixed +05:30 offset rather than zoneinfo("Asia/Kolkata"): matches the
 # timestamp style already used throughout db/schema_and_seed.sql, and
@@ -25,6 +25,11 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 
 def _now_ist_iso() -> str:
+    # Second precision, matching the seed data's timestamp style -- but
+    # this means two writes in the same second (e.g. two turns of a fast
+    # conversation) can get an identical timestamp. Every "most recent
+    # row" query below breaks ties with `rowid DESC`, not timestamp
+    # alone, so ordering stays correct even when timestamps collide.
     return datetime.now(IST).isoformat(timespec="seconds")
 
 
@@ -47,6 +52,37 @@ def _row_to_shipment_summary(row: sqlite3.Row) -> ShipmentSummary:
         current_slot_start_ts=row["slot_start_ts"],
         current_slot_end_ts=row["slot_end_ts"],
     )
+
+
+def _digits_only(s: str) -> str:
+    return "".join(ch for ch in s if ch.isdigit())
+
+
+def find_driver_by_phone(conn: sqlite3.Connection, phone: str) -> Optional[Driver]:
+    """Look up a driver by phone number.
+
+    This is the identity check a real channel (e.g. WhatsApp) would do
+    automatically from the sender's number -- chat.py asks for it
+    explicitly since there's no real channel here. Matches on the last 10
+    digits so formatting differences (spaces, dashes, missing country
+    code) don't cause a false miss; seed data is small enough (15 drivers)
+    that scanning it in Python is fine, a real deployment would normalize
+    phone numbers at write time and index/query on that instead.
+    """
+    suffix = _digits_only(phone)[-10:]
+    if len(suffix) < 10:
+        return None
+    rows = conn.execute("SELECT driver_id, driver_name, phone, carrier_id, driver_status FROM drivers").fetchall()
+    for row in rows:
+        if _digits_only(row["phone"])[-10:] == suffix:
+            return Driver(
+                driver_id=row["driver_id"],
+                driver_name=row["driver_name"],
+                phone=row["phone"],
+                carrier_id=row["carrier_id"],
+                driver_status=row["driver_status"],
+            )
+    return None
 
 
 def find_shipments_for_driver(conn: sqlite3.Connection, driver_id: str) -> List[ShipmentSummary]:
@@ -203,3 +239,184 @@ def propose_booking(
         else:
             reason = "Booking rejected: {}".format(message)
         return BookingResult(success=False, appointment_id=None, reason=reason)
+
+
+# --- Conversation state persistence -----------------------------------
+# Backs app/conversation.py's memory across turns using the schema's own
+# chat_threads/chat_messages tables (see docs/developer/architecture.md).
+# Still deterministic, still no LLM calls -- this is bookkeeping, not
+# understanding.
+
+
+def get_or_create_open_thread(conn: sqlite3.Connection, driver_id: str, shipment_id: str) -> str:
+    """One open thread per (driver, shipment); reused across turns until
+    resolved/closed."""
+    row = conn.execute(
+        """
+        SELECT thread_id FROM chat_threads
+        WHERE driver_id = ? AND shipment_id = ?
+          AND thread_status NOT IN ('RESOLVED', 'CLOSED')
+        ORDER BY opened_at DESC, rowid DESC LIMIT 1
+        """,
+        (driver_id, shipment_id),
+    ).fetchone()
+    if row:
+        return row["thread_id"]
+
+    thread_id = "THR-{}".format(uuid.uuid4().hex[:8].upper())
+    conn.execute(
+        """
+        INSERT INTO chat_threads (thread_id, driver_id, shipment_id, opened_at, closed_at, thread_status, thread_intent)
+        VALUES (?, ?, ?, ?, NULL, 'OPEN', 'UNKNOWN')
+        """,
+        (thread_id, driver_id, shipment_id, _now_ist_iso()),
+    )
+    conn.commit()
+    return thread_id
+
+
+def set_thread_state(conn: sqlite3.Connection, thread_id: str, status: str, intent: str) -> None:
+    conn.execute(
+        "UPDATE chat_threads SET thread_status = ?, thread_intent = ? WHERE thread_id = ?",
+        (status, intent, thread_id),
+    )
+    conn.commit()
+
+
+_SEVERITY_BY_PRIORITY = {"CRITICAL": "CRITICAL", "HIGH": "HIGH", "NORMAL": "MEDIUM", "LOW": "LOW"}
+
+
+def get_or_create_exception(
+    conn: sqlite3.Connection,
+    thread_id: str,
+    driver_id: str,
+    shipment_id: str,
+    exception_type: str,
+    description: str,
+    declared_eta_ts: Optional[str],
+    priority_code: str,
+) -> str:
+    """One exception record per thread, reused across turns (its
+    exception_type/description are set once, at first report; only its
+    status moves via set_exception_status). Mirrors the 1:1 thread<->
+    exception pattern already in the seed data (e.g. THR001/EXC001)."""
+    row = conn.execute(
+        "SELECT exception_id FROM driver_exceptions WHERE thread_id = ? ORDER BY reported_at DESC, rowid DESC LIMIT 1",
+        (thread_id,),
+    ).fetchone()
+    if row:
+        return row["exception_id"]
+
+    exception_id = "EXC-{}".format(uuid.uuid4().hex[:8].upper())
+    now = _now_ist_iso()
+    dedupe_key = "{}-{}-{}".format(driver_id, shipment_id or "UNKNOWN", now)
+    conn.execute(
+        """
+        INSERT INTO driver_exceptions (
+            exception_id, shipment_id, driver_id, thread_id, exception_type, reported_at,
+            reported_delay_min, declared_eta_ts, earliest_acceptable_ts, latest_acceptable_ts,
+            severity_code, exception_status, description, dedupe_key
+        ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL, ?, 'OPEN', ?, ?)
+        """,
+        (
+            exception_id,
+            shipment_id,
+            driver_id,
+            thread_id,
+            exception_type,
+            now,
+            declared_eta_ts,
+            _SEVERITY_BY_PRIORITY.get(priority_code, "MEDIUM"),
+            description,
+            dedupe_key,
+        ),
+    )
+    conn.commit()
+    return exception_id
+
+
+def set_exception_status(conn: sqlite3.Connection, exception_id: str, status: str) -> None:
+    conn.execute("UPDATE driver_exceptions SET exception_status = ? WHERE exception_id = ?", (status, exception_id))
+    conn.commit()
+
+
+def record_message(
+    conn: sqlite3.Connection,
+    thread_id: str,
+    sender_type: str,
+    message_text: str,
+    parsed_intent: Optional[str] = None,
+    extracted_eta_ts: Optional[str] = None,
+    offered_slot_ids: Optional[List[str]] = None,
+) -> str:
+    message_id = "MSG-{}".format(uuid.uuid4().hex[:8].upper())
+    conn.execute(
+        """
+        INSERT INTO chat_messages (
+            chat_message_id, thread_id, sender_type, sender_reference, message_text,
+            message_ts, external_message_id, is_duplicate, parsed_intent,
+            extracted_eta_ts, requires_human_review, offered_slot_ids
+        ) VALUES (?, ?, ?, NULL, ?, ?, NULL, 0, ?, ?, 0, ?)
+        """,
+        (
+            message_id,
+            thread_id,
+            sender_type,
+            message_text,
+            _now_ist_iso(),
+            parsed_intent,
+            extracted_eta_ts,
+            ",".join(offered_slot_ids) if offered_slot_ids else None,
+        ),
+    )
+    conn.commit()
+    return message_id
+
+
+def get_last_offered_slot_ids(conn: sqlite3.Connection, thread_id: str) -> List[str]:
+    """slot_ids from the most recent AGENT message in this thread that
+    offered options, in the order they were shown. Empty if none."""
+    row = conn.execute(
+        """
+        SELECT offered_slot_ids FROM chat_messages
+        WHERE thread_id = ? AND sender_type = 'AGENT' AND offered_slot_ids IS NOT NULL
+        ORDER BY message_ts DESC, rowid DESC LIMIT 1
+        """,
+        (thread_id,),
+    ).fetchone()
+    if not row or not row["offered_slot_ids"]:
+        return []
+    return row["offered_slot_ids"].split(",")
+
+
+def get_slots_by_ids(conn: sqlite3.Connection, slot_ids: List[str]) -> Dict[str, SlotOption]:
+    """Dock/time info for specific slots regardless of current
+    availability -- lets a caller resolve "the first option" against what
+    was actually offered even if it's since been taken. Availability
+    itself must be re-checked separately (e.g. against
+    find_feasible_slots' current result) before booking."""
+    if not slot_ids:
+        return {}
+    placeholders = ",".join("?" for _ in slot_ids)
+    rows = conn.execute(
+        """
+        SELECT sl.slot_id, sl.facility_id, d.dock_code, d.dock_type, sl.slot_start_ts, sl.slot_end_ts
+        FROM appointment_slots sl
+        JOIN docks d ON d.dock_id = sl.dock_id
+        WHERE sl.slot_id IN ({})
+        """.format(placeholders),
+        slot_ids,
+    ).fetchall()
+    return {
+        row["slot_id"]: SlotOption(
+            slot_id=row["slot_id"],
+            facility_id=row["facility_id"],
+            dock_code=row["dock_code"],
+            dock_type=row["dock_type"],
+            slot_start_ts=row["slot_start_ts"],
+            slot_end_ts=row["slot_end_ts"],
+            needs_manual_approval=False,
+            manual_approval_reason=None,
+        )
+        for row in rows
+    }

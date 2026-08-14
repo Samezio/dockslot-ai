@@ -116,13 +116,46 @@ takes the validated intent and does everything else deterministically:
   previously-offered option they picked), never to decide *what's
   available*.
 - Only calls `propose_booking()` when the driver's message is classified
-  `CHOOSE_OPTION` and can be matched (by ordinal, dock code, or time) against
-  a **freshly recomputed** option list -- never against a list shown in an
-  earlier turn, which could be stale.
+  `CHOOSE_OPTION` and can be matched (by ordinal, dock code, or time)
+  against the options **actually shown in this thread's last turn**
+  (persisted -- see below), re-verified for current availability right
+  before booking. Never against a blind fresh recompute, which could
+  silently reorder and make "the first one" mean something different than
+  what the driver saw.
 - Every reply is built from template strings around real query results,
   not LLM-phrased -- lower latency, one fewer place for the model to
   invent something. Revisit if replies need to sound less mechanical once
   this is validated with real users.
+
+### Conversation state persistence
+
+Backed by the schema's own `chat_threads`/`chat_messages` tables (one
+open thread per driver+shipment, reused across turns via
+`app/repository.py::get_or_create_open_thread`). Every turn is recorded
+(`record_message`) with the classified intent and, when options were
+offered, their `slot_id`s in order (`offered_slot_ids` -- a column we
+added to `chat_messages`; not part of the original provided schema). A
+later "take the first option" resolves via `get_last_offered_slot_ids` +
+`get_slots_by_ids` against that exact stored list/order, not a fresh
+`find_feasible_slots` call -- availability is still re-checked against a
+fresh call before booking, so staleness fails safely (a clear "that
+option's gone, here are current alternatives" reply) rather than
+silently.
+
+Ambiguous-driver replies (multiple active shipments) are deliberately
+**not** persisted -- there's no resolved shipment to attach a thread to,
+and the reply is fully deterministic from `find_shipments_for_driver`
+alone, so re-asking costs nothing and can't go stale.
+
+`driver_exceptions` is now wired up too: one exception record per thread
+(`get_or_create_exception`, reused across turns like the thread itself),
+created for REPORT_DELAY/ASK_SLOT_OPTIONS/EARLY_ARRIVAL/CHOOSE_OPTION (not
+for CHECK_STATUS or general questions -- those aren't reporting or acting
+on a delay). `exception_type`/`description`/`severity_code` (mapped from
+the shipment's `priority_code`) are set once at first report;
+`exception_status` moves each turn via `set_exception_status`, mirrored
+1:1 with the reply actually given (`SLOT_OPTIONS_SHARED`,
+`WAITING_CONFIRMATION`, `RESOLVED`, `ESCALATED`, `NEEDS_INFORMATION`).
 
 ### Provider abstraction (`app/llm.py`)
 
@@ -148,21 +181,60 @@ that key has limited credits -- raise/remove once it's not a shared
 low-credit dev key. See `.env.example` for the full set of variables
 `app/llm.py` recognizes.
 
+## Multi-driver concurrency proof
+
+`scripts/concurrency_demo.py` -- separate threads, separate DB
+connections, synchronized with a `threading.Barrier` so they call
+`propose_booking()`/`find_feasible_slots()` at the same instant, not
+sequentially. Two scenarios: N threads forced onto one exact slot (the
+mechanical proof), and 5 threads each independently asking "what's my
+best slot after 18:00?" -- the brief's own §7.2 example ("five drivers
+may ask for a 6:00 PM window when only one compatible dock is free").
+Outcomes vary run to run (it's a real race), but every genuine collision
+resolves to exactly one winner, verified by querying `appointments`
+directly afterward -- not by trusting the Python-level return values.
+No LLM involved.
+
+## Automated tests
+
+`tests/` -- pytest, deterministic only (no LLM calls, no network). Each
+test gets a fresh `:memory:` DB from `db/schema_and_seed.sql`
+(`tests/conftest.py`), except `tests/test_concurrency.py` which needs a
+real temp *file* DB to test genuine multi-connection/multi-thread access
+(`:memory:` doesn't share across connections without special URI
+handling). `scripts/demo.py`, `scripts/concurrency_demo.py`, and
+`scripts/chat_demo.py` remain as narrated walkthroughs -- useful for
+watching what happens, not a substitute for `pytest`. Run: `pytest -q`
+(needs `requirements-dev.txt`).
+
+`tests/test_conversation.py` covers `app/conversation.py`'s orchestration
+by monkeypatching `app.conversation.extract_intent` to return a canned
+`DriverMessageIntent` -- everything downstream (persistence, option
+matching, escalation, booking) runs for real, no LLM call needed. Includes
+the direct regression test for the ordinal-drift bug the persistence
+layer fixed (`test_choose_option_resolves_against_persisted_list_not_
+fresh_recompute`): books nothing rather than silently booking whatever a
+fresh recompute would now put first.
+
+Writing tests here surfaced a real bug: `get_last_offered_slot_ids` (and
+the other "most recent row" queries) ordered by timestamp alone, but
+`record_message`'s timestamps are second-precision -- two turns in the
+same second tie, and ties aren't guaranteed to break in insertion order.
+Fixed with an explicit `rowid DESC` tiebreaker on every such query in
+`app/repository.py`.
+
 ## Not built yet
 
-- Conversation state persistence (`chat_threads`/`chat_messages`/
-  `driver_exceptions` exist in the schema for this). Right now
-  `handle_driver_message` is stateless -- every call re-derives everything
-  from the DB, so a driver picking "the second option" only works within
-  the options just recomputed in that same call, not across a real
-  multi-turn back-and-forth. Persisting messages/threads is the natural
-  next increment once this is validated.
 - Any web/API surface (FastAPI etc.) -- deferred until there's a reason to
   serve this over HTTP (e.g. a real chat channel) rather than call it
   in-process.
 - The optional facility-wide scheduling-engine extension from the brief
   (§7.3) -- explicitly out of scope for the first working slice.
-- Automated tests (`tests/`) -- `scripts/demo.py` (deterministic layer) and
-  `scripts/chat_demo.py` (conversational layer, hits a real LLM) currently
-  play that role as narrated walkthroughs; promote their scenarios into
-  real tests once the shape of both layers stabilizes.
+- Duplicate-message detection (`chat_messages.is_duplicate`,
+  `driver_exceptions.dedupe_key` exist in the schema for this; not read
+  or written by app code yet).
+- Tests for the conversational layer itself (`app/conversation.py`'s
+  orchestration, `app/intent.py`) -- covered manually via
+  `scripts/chat_demo.py` today since they need a live LLM call;
+  `tests/test_conversation_helpers.py` covers the pure-function pieces
+  (option matching, time parsing) without one.
