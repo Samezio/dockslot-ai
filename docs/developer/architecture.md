@@ -220,6 +220,67 @@ resolves to exactly one winner, verified by querying `appointments`
 directly afterward -- not by trusting the Python-level return values.
 No LLM involved.
 
+## Facility-wide scheduling engine (`app/scheduling.py`, brief §7.3 -- optional)
+
+Everything above answers one driver's own question (`find_feasible_slots`
+only needs that shipment's view). This is the separate, optional tool the
+brief describes: look at ALL trucks relevant to one facility together
+(already-in-a-dock, waiting in the yard, still in transit) and propose a
+whole-day dock assignment. It's a standalone module, not wired into
+`app/conversation.py`'s per-message flow -- called on demand
+(`scripts/scheduling_demo.py`), never interprets free text, same
+tool-boundary discipline as the rest of `app/repository.py`.
+
+**Modeling.** This is the classic *unrelated parallel machines with
+eligibility* scheduling problem: docks = machines, shipments = jobs, a
+job may only run on docks it's physically compatible with. Solved with
+[Google OR-Tools CP-SAT](https://github.com/google/or-tools/blob/stable/ortools/sat/docs/scheduling.md)
+-- the tool the brief's own references point to. One optional interval
+variable per (job, eligible-dock) pair sharing a common start/end
+variable; `add_no_overlap` per dock across everything assigned to it
+(including fixed/blocked intervals); and, critically, each job gets
+*"exactly one of {assigned to some eligible dock, explicitly left
+unscheduled}"* rather than a hard "must be assigned" constraint -- an
+overloaded day degrades to "some trucks don't get a slot today" (reported
+explicitly) instead of the whole model going infeasible.
+
+**Data boundary** (brief §7.3, verbatim): only the original planned ETA,
+the latest driver-declared ETA, and actual gate-in time once a truck
+reaches the facility. No live GPS, nothing beyond what's already in the
+database -- `build_facility_snapshot` reads `v_inbound_operational_state`,
+`facility_checkins`, `dock_status_events`, `docks`, `facility_rules`, and
+(for a soft deadline) `appointments`/`driver_exceptions.latest_acceptable_ts`.
+
+**Objective**: minimize `sum(priority_weight * waiting_time)` +
+`10 * sum(priority_weight * tardiness)` for jobs with a known deadline
+(their current booked slot's end, or a driver-stated latest-acceptable
+time) + `10,000 * sum(priority_weight * left_unscheduled)`. The large
+gaps between tiers are deliberate, not tuned business policy: always
+prefer scheduling over not, always prefer meeting a stated deadline over
+merely minimizing generic waiting. `priority_code` maps to an ordinal
+weight (CRITICAL=4 ... LOW=1) per the brief's "shipment priority: a
+weight or penalty" framing.
+
+**A real bug this surfaced**: `dock_status_events` and
+`facility_checkins` can describe the *same* real-world unavailability
+from two different angles -- the seed data has a `CAPACITY_REDUCTION`
+event on `DOCK-JAI-D2` (08:00-09:20) that exists precisely *because*
+`SHP1002` overran in that same dock (in-progress 08:05-09:15). Feeding
+both to the solver as separate mandatory blocking intervals is a hard,
+unsatisfiable conflict (confirmed live: the whole model came back
+`INFEASIBLE`) regardless of any job. Fixed by merging overlapping fixed
+occupancies per dock (`_merge_overlapping_occupancies`) before they reach
+the solver. Worth remembering if another data source describing dock
+unavailability gets added later.
+
+**Verified**: the brief's own §7.3 worked example (SHP-201..204, two
+dock doors) reproduced directly as a test, plus the real Jaipur facility
+snapshot solves to `OPTIMAL` with 15/16 trucks scheduled -- the one left
+unscheduled (`SHP1015`) is *independently* the same shipment
+`find_feasible_slots` already reports as having no feasible slot (seed
+case THR005), a good cross-check that both layers agree. See
+`tests/test_scheduling.py` and `scripts/scheduling_demo.py`.
+
 ## Automated tests
 
 `tests/` -- pytest, deterministic only (no LLM calls, no network). Each
@@ -248,18 +309,23 @@ same second tie, and ties aren't guaranteed to break in insertion order.
 Fixed with an explicit `rowid DESC` tiebreaker on every such query in
 `app/repository.py`.
 
+`tests/test_scheduling.py` covers `app/scheduling.py`: the brief's own
+§7.3 worked example as a golden test, priority/deadline-driven contention
+resolution, graceful degradation under overload, and the real seeded
+Jaipur facility (including the merged-fixed-occupancy fix above).
+
 ## Not built yet
 
 - Any web/API surface (FastAPI etc.) -- deferred until there's a reason to
   serve this over HTTP (e.g. a real chat channel) rather than call it
   in-process.
-- The optional facility-wide scheduling-engine extension from the brief
-  (§7.3) -- explicitly out of scope for the first working slice.
-- Duplicate-message detection (`chat_messages.is_duplicate`,
-  `driver_exceptions.dedupe_key` exist in the schema for this; not read
-  or written by app code yet).
-- Tests for the conversational layer itself (`app/conversation.py`'s
-  orchestration, `app/intent.py`) -- covered manually via
-  `scripts/chat_demo.py` today since they need a live LLM call;
-  `tests/test_conversation_helpers.py` covers the pure-function pieces
-  (option matching, time parsing) without one.
+- `app/scheduling.py` is not wired into `app/conversation.py`'s
+  per-message flow -- it's a standalone tool, called on demand. Hooking
+  it up (e.g. a driver's message triggers a facility-wide recompute
+  instead of just its own `find_feasible_slots` view) is a real design
+  decision -- see the module docstring for why it's deliberately kept
+  separate for now.
+- Live-LLM correctness testing (does the model actually classify
+  messages right) stays manual, via `scripts/chat_demo.py` /
+  `scripts/chat.py` -- automated tests mock the LLM call by design (see
+  "Automated tests" above).

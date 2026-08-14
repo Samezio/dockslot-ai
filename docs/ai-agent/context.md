@@ -24,8 +24,15 @@ layer, `app/conversation.py`'s orchestration (LLM mocked via
 monkeypatching `app.conversation.extract_intent`) and pure-function
 helpers, and concurrency.
 
-Not built: any web/API surface, the optional scheduling-engine extension.
-Full status: `docs/developer/roadmap.md`.
+The optional facility-wide scheduling engine (brief §7.3) is built too:
+`app/scheduling.py`, solved with Google OR-Tools CP-SAT, standalone --
+not wired into the live chat flow. `tests/test_scheduling.py` covers it,
+including the brief's own §7.3 worked example reproduced directly as a
+test. Everything in the brief is now built; see
+`docs/developer/roadmap.md`'s "Against the PDF brief" section.
+
+Not built: any web/API surface, wiring the scheduling engine into the
+live chat flow. Full status: `docs/developer/roadmap.md`.
 
 ## LLM provider
 
@@ -136,6 +143,29 @@ checking.
   `tests/test_concurrency.py` (needed for genuine multi-connection
   access). Don't add a test that calls a real LLM provider -- that's what
   `scripts/chat_demo.py` is for, run manually.
+- **`app/scheduling.py` never gets called from `app/conversation.py`.**
+  It's a standalone, on-demand tool (facility-wide), not part of the
+  per-driver chat path (which stays on `find_feasible_slots`, a single
+  shipment's view). Don't add a call from `handle_driver_message` into
+  the scheduling engine without treating that as the real architectural
+  decision it would be (see the module docstring for the reasoning) --
+  check with the developer first.
+- **When two data sources can describe the same real-world state, check
+  for double-counting before treating both as independent hard
+  constraints.** `app/scheduling.py` hit this for real:
+  `dock_status_events` and `facility_checkins` both described the same
+  dock overrun, and feeding both to the solver as separate mandatory
+  blocks made the whole model `INFEASIBLE`
+  (`_merge_overlapping_occupancies` fixes it). If you add a new fixed/
+  blocking-interval source to the scheduler, check whether it can overlap
+  an existing one for the same physical resource.
+- **`app/scheduling.py`'s objective tiers are deliberately far apart**
+  (waiting < 10x tardiness < 10,000x unscheduled) -- not tuned business
+  policy, just enough separation that the solver's priority ordering
+  (schedule > meet a deadline > minimize generic waiting) never inverts
+  by accident. Don't "simplify" these to closer values without checking
+  the tests still enforce the intended ordering
+  (`tests/test_scheduling.py`'s priority/deadline tests).
 - **`.project_details/` is gitignored** (it holds the original challenge
   PDF and a nested zip of the data package). Nothing in the tracked repo
   should depend on it existing -- `db/schema_and_seed.sql` is the durable,

@@ -26,26 +26,38 @@ exception state left untouched. Verified live (OpenRouter). Known
 limitation: a retry after the thread already resolved starts a fresh
 thread instead of being flagged -- see architecture.md.
 
+## MVP 4 -- facility-wide scheduling engine (done)
+
+Brief §7.3, the optional extension. `app/scheduling.py`: unrelated-
+parallel-machines-with-eligibility scheduling (docks = machines,
+shipments = jobs), solved with Google OR-Tools CP-SAT -- the tool the
+brief's own references point to. Standalone module, not wired into the
+per-message chat flow (see architecture.md for why). Verified against the
+brief's own §7.3 worked example (two dock doors, four trucks) reproduced
+as a test, and against the real seeded Jaipur facility -- solves
+`OPTIMAL`, 15/16 trucks scheduled, the one left unscheduled matches what
+`find_feasible_slots` independently reports for the same shipment (seed
+case THR005). Surfaced and fixed a real bug along the way: two data
+sources (`dock_status_events`, `facility_checkins`) can describe the same
+real-world dock unavailability, and feeding both to the solver as
+separate hard blocks made the whole model `INFEASIBLE`.
+
 ## Not built yet
 
 - Any web/API surface (FastAPI etc.)
-- The optional facility-wide scheduling-engine extension (brief §7.3) -- explicitly out of scope for the first working slice
+- Wiring `app/scheduling.py` into the live chat flow (e.g. a driver's
+  message triggering a facility-wide recompute) -- currently a
+  standalone tool, called on demand.
 - Live-LLM correctness testing (does the model actually classify messages right) stays manual, via `scripts/chat_demo.py` / `scripts/chat.py` -- automated tests mock the LLM call by design, see architecture.md
 
 ## Against the PDF brief
 
-Everything in brief §7.1 (first-level challenge: one driver), §7.2 (the
-real challenge: many drivers / concurrent requests), and §11.2's
-duplicate-message stress case is built and tested. §9.3 (human control:
-no-feasible-slot escalation, no silent guessing) is built. One thing from
-the brief is explicitly **not** done, by design, not oversight:
-
-- **§7.3, the optional facility-wide scheduling engine.** The brief
-  itself marks this optional/advanced. Not started.
-
-Everything else in the core brief (chat-based exception handling,
-feasibility, concurrency safety, escalation, duplicate handling,
-human-control boundaries) is built. The scheduling engine is the only
-sizeable piece of the brief left, and it's optional.
+Everything in the brief is built and tested: §7.1 (one driver), §7.2
+(many drivers / concurrent requests), §7.3 (the optional facility-wide
+scheduling engine), §9.3 (human control -- no-feasible-slot escalation,
+no silent guessing), and §11.2 (duplicate-message handling). Nothing from
+the brief's in-scope requirements remains; what's left (a web/API
+surface, live-LLM test automation) is infrastructure around the brief,
+not content from it.
 
 See `docs/developer/architecture.md` for how each piece works.
