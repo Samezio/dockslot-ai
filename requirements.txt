@@ -1,0 +1,5 @@
+# The deterministic layer (app/db.py, app/models.py, app/repository.py)
+# is stdlib-only on purpose: sqlite3 + dataclasses, no ORM, nothing to
+# pin here yet. Real dependencies (Pydantic, an LLM SDK, FastAPI) get
+# added when the conversational layer is built and actually needs them --
+# see CLAUDE.md section 24 (Dependencies).

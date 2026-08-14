@@ -1,8 +1,13 @@
 #custom
 .project_details/
 
+# Generated SQLite DB — rebuild with `python scripts/build_db.py`
+# from the tracked db/schema_and_seed.sql
+data/
+
 #AI
 CLAUDE.md
+.claude/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
