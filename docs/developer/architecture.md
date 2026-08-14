@@ -83,7 +83,48 @@ the same way by a human, a test, or (later) an agent's tool-calling layer:
   facility rule (e.g. `LAST_NEW_START_TIME`).
 - `propose_booking(conn, shipment_id, slot_id, booking_source)` -- writes
   `PENDING_CONFIRMATION` (not `CONFIRMED`) and surfaces the DB's
-  concurrency guard as a typed result.
+  concurrency guard as a typed result. Also performs **rescheduling** when
+  the shipment already has an appointment -- see below.
+- `is_slot_available_for(conn, shipment_id, slot_id)` -- is one specific
+  known slot still open and compatible. Deliberately not "is it in
+  `find_feasible_slots()`", which is windowed and capped; see below.
+
+### Rescheduling (a driver moving their appointment)
+
+This is the brief's central workflow, and it needs care because the
+per-shipment unique index means a shipment can only ever hold one active
+appointment. `propose_booking` handles it in a single transaction, in
+this order:
+
+1. `INSERT` the new appointment with `is_current = 0`. This still hits
+   `ux_active_appointment_per_slot`, so **the race for the new slot is
+   decided here** -- but it does not hit
+   `ux_current_active_appointment_per_shipment`, which only covers
+   `is_current = 1` rows, so the old appointment can coexist for the
+   moment in between.
+2. Only once that succeeded: cancel the old appointment
+   (`CANCELLED`, `is_current = 0`, `cancelled_at`, `cancellation_reason`),
+   which releases its slot back to `v_slot_availability` for other drivers.
+3. Promote the new row to `is_current = 1`.
+
+**Order is the safety property.** Claiming the new slot before releasing
+the old one means that if the new slot is lost to another driver
+mid-conversation, steps 2 and 3 never run and the driver still holds the
+appointment they started with. Releasing first would leave them with
+nothing -- worse off than if they had never messaged. Regression test:
+`tests/test_repository.py::test_failed_reschedule_leaves_the_original_appointment_intact`.
+
+The replacement is auditable: the new row's `replaced_appointment_id`
+points at the old one, matching the schema's own intent (the seed's
+`APT1008` uses the same `CANCELLED` + `is_current = 0` shape).
+
+**Why `is_slot_available_for` exists.** The pre-booking availability
+re-check used to be `slot_id in find_feasible_slots(...)`. That call is
+windowed (`after_ts`) and capped (`limit`), so a slot that was genuinely
+available but sat outside the window -- or beyond the first N rows --
+read as unavailable, and the driver was told a bookable slot was "no
+longer available". Availability of a *known* slot is a question about
+that slot, not about a ranked list.
 
 Dataclasses, not Pydantic, for `app/models.py`: this layer only moves
 structured DB rows around, so there's nothing to validate beyond what the
@@ -309,10 +350,15 @@ Endpoints:
   recompute) would be a materially different, heavier behavior and stays
   a real design decision for later, not something this endpoint does
   implicitly.
-- `GET /` serves `web/index.html`, a single self-contained static page
-  (vanilla JS, no build step, no framework) that drives all three
-  endpoints: identify -> chat transcript -> optional facility-schedule
-  view.
+- `GET /` serves `web/index.html` -- the **driver** page: identify ->
+  chat transcript. Self-contained static HTML, vanilla JS, no build step.
+- `GET /ops` serves `web/ops.html` -- the **dispatcher** page: the
+  facility-wide schedule. Deliberately a separate page. It lists every
+  truck at a facility, which is neither a driver's question nor a
+  driver's business (they'd be seeing other carriers' shipments). It also
+  carries a visible "advisory only" banner, because most proposed times
+  aren't bookable and the proposal may move confirmed appointments (see
+  known-issues 02 and 03).
 
 **No authentication.** This is a local/dev tool like the rest of the
 project so far -- `driver_id` isn't cryptographically tied to the phone

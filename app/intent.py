@@ -31,6 +31,28 @@ available is REPORT_DELAY or ASK_SLOT_OPTIONS, even if it's phrased as a \
 question ("can I still get a slot?", "can the reefer unload tonight?"). \
 Reserve GENERAL_QUESTION and UNKNOWN for messages that aren't about a \
 delay or slot need at all.
+
+Choosing the intent:
+- CHECK_STATUS: the driver is asking about their EXISTING appointment or \
+its confirmation state, and is not reporting a delay -- "what is my \
+appointment?", "when am I supposed to unload?", "what time is my slot?", \
+"which dock am I on?", "has the warehouse confirmed?", "is my booking \
+still on?". Anything asking what their current plan IS goes here.
+- CHOOSE_OPTION: the driver is picking one of the options already shown \
+to them -- "the second one", "take the 7:30 slot", "D2 works", "book it".
+- EARLY_ARRIVAL: the driver will arrive EARLIER than planned.
+- REPORT_DELAY: the driver will arrive LATER, or reports a problem \
+(traffic, breakdown, tyre) that delays them.
+- ASK_SLOT_OPTIONS: the driver wants to see what other slots are \
+available, including "can you move/change my slot?" (asking to reschedule \
+is a request for options, not a status check).
+- GENERAL_QUESTION / UNKNOWN: only when none of the above fit. Do not use \
+these for a question about the driver's own appointment -- that is \
+CHECK_STATUS.
+
+For missing_information, write actual QUESTIONS to ask the driver in \
+plain English ("how late do you expect to be?"). Never put schema or \
+field names there -- it is shown verbatim to the driver.
 """
 
 

@@ -49,11 +49,55 @@ def _refuse_to_be_called(*_args, **_kwargs):
     raise AssertionError("extract_intent should not have been called")
 
 
-def test_ambiguous_driver_asks_without_calling_llm(conn, monkeypatch):
+def test_ambiguous_driver_asks_when_it_cannot_tell_and_without_calling_llm(conn, monkeypatch):
+    # DRV004 has two active shipments. Close their open conversation so
+    # there is genuinely nothing to go on -- no reference in the message,
+    # no conversation in progress.
+    conn.execute("UPDATE chat_threads SET thread_status = 'CLOSED' WHERE driver_id = 'DRV004'")
     monkeypatch.setattr("app.conversation.extract_intent", _refuse_to_be_called)
+
     reply = handle_driver_message(conn, "DRV004", "I will be late by 45 minutes.")
     assert "more than one active shipment" in reply
     assert "SHP1004" in reply and "SHP1020" in reply
+
+
+def test_explicit_shipment_reference_beats_the_in_progress_conversation(conn, monkeypatch):
+    """A driver naming a shipment must be believed -- even when they have
+    an open conversation about the OTHER one. Being told beats inferring."""
+    # DRV004's open thread is for SHP1004; the message names SHP1020.
+    _mock_extract(monkeypatch, _intent(DriverIntent.CHECK_STATUS))
+    reply = handle_driver_message(conn, "DRV004", "what's happening with SHP1020?")
+
+    assert "more than one active shipment" not in reply
+    assert "Assuming" not in reply, "it was told explicitly -- nothing to assume"
+
+    thread = conn.execute(
+        "SELECT thread_id FROM chat_threads WHERE driver_id='DRV004' AND shipment_id='SHP1020'"
+    ).fetchone()
+    assert thread is not None, "should have opened a thread for the shipment the driver named"
+
+
+def test_followup_without_a_reference_continues_the_open_conversation_and_says_so(conn, monkeypatch):
+    """The bug this fixes: a driver with two shipments could never get
+    past the disambiguation question, because nothing consumed their
+    answer and follow-ups carried no reference of their own."""
+    _mock_extract(monkeypatch, _intent(DriverIntent.REPORT_DELAY, declared_eta_local_time="09:00"))
+    reply = handle_driver_message(conn, "DRV006", "running late")
+
+    assert "more than one active shipment" not in reply
+    # DRV006's open thread is SHP1006 -- inferred, so it must say so.
+    assert "Assuming this is about SHP1006" in reply
+
+
+def test_order_reference_also_resolves_the_shipment(conn, monkeypatch):
+    order_ref = conn.execute("SELECT order_reference FROM shipments WHERE shipment_id='SHP1020'").fetchone()[0]
+    _mock_extract(monkeypatch, _intent(DriverIntent.CHECK_STATUS))
+    reply = handle_driver_message(conn, "DRV004", "about order {}".format(order_ref))
+
+    assert "more than one active shipment" not in reply
+    assert conn.execute(
+        "SELECT 1 FROM chat_threads WHERE driver_id='DRV004' AND shipment_id='SHP1020'"
+    ).fetchone() is not None
 
 
 def test_no_active_shipment_replies_without_calling_llm(conn, monkeypatch):

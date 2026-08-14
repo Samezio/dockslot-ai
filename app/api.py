@@ -56,7 +56,16 @@ def get_db() -> Iterator[sqlite3.Connection]:
 
 @app.get("/", include_in_schema=False)
 def index():
+    """Driver-facing chat."""
     return FileResponse(WEB_DIR / "index.html")
+
+
+@app.get("/ops", include_in_schema=False)
+def ops():
+    """Dispatcher-facing facility schedule. Deliberately a separate page:
+    it shows every truck at a facility, which is neither a driver's
+    question nor a driver's business."""
+    return FileResponse(WEB_DIR / "ops.html")
 
 
 @app.get("/health")

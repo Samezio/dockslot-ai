@@ -22,6 +22,7 @@ class Driver:
 @dataclass
 class ShipmentSummary:
     shipment_id: str
+    order_reference: str
     driver_id: str
     destination_facility_id: str
     required_dock_type: str
@@ -56,3 +57,7 @@ class BookingResult:
     success: bool
     appointment_id: Optional[str]
     reason: Optional[str]
+    # Set when this booking replaced an existing appointment (a reschedule)
+    # rather than creating a first one -- lets the caller tell the driver
+    # their old slot was released instead of implying they now hold two.
+    replaced_appointment_id: Optional[str] = None

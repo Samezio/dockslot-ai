@@ -85,7 +85,8 @@
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
   th { color: var(--muted); font-weight: 600; }
   .manual { color: #fbbf24; }
-  .unscheduled { margin-top: 10px; font-size: 0.85rem; color: var(--muted); }
+  .footer-link { margin-top: 20px; font-size: 0.8rem; color: var(--muted); }
+  .footer-link a { color: var(--accent); }
 </style>
 </head>
 <body>
@@ -120,19 +121,11 @@
     <div class="hint">Talking as <span id="chatDriverLabel"></span>. <a href="#" id="switchLink" style="color: var(--accent)">switch driver</a></div>
   </section>
 
-  <section id="scheduleSection">
-    <h2>3. Facility schedule (on-demand, optional)</h2>
-    <div class="row">
-      <div>
-        <label for="facilityId">Facility ID</label>
-        <input type="text" id="facilityId" value="FAC-JAI-01">
-      </div>
-      <button id="scheduleBtn">Load schedule</button>
-    </div>
-    <div id="scheduleError" class="error"></div>
-    <div id="scheduleResult"></div>
-  </section>
 </main>
+
+<div class="footer-link">
+  Dispatcher? The facility-wide dock schedule is at <a href="/ops">/ops</a>.
+</div>
 
 <script>
 const identifyBtn = document.getElementById('identifyBtn');
@@ -145,10 +138,6 @@ const transcript = document.getElementById('transcript');
 const messageInput = document.getElementById('messageInput');
 const sendBtn = document.getElementById('sendBtn');
 const switchLink = document.getElementById('switchLink');
-const facilityIdInput = document.getElementById('facilityId');
-const scheduleBtn = document.getElementById('scheduleBtn');
-const scheduleError = document.getElementById('scheduleError');
-const scheduleResult = document.getElementById('scheduleResult');
 
 let currentDriverId = null;
 
@@ -229,60 +218,10 @@ async function sendMessage() {
   }
 }
 
-async function loadSchedule() {
-  scheduleError.textContent = '';
-  scheduleResult.innerHTML = '';
-  const facilityId = facilityIdInput.value.trim();
-  if (!facilityId) return;
-  scheduleBtn.disabled = true;
-  try {
-    const res = await fetch('/schedule/' + encodeURIComponent(facilityId));
-    const body = await res.json();
-    if (!res.ok) {
-      scheduleError.textContent = body.detail || 'Failed to load schedule.';
-      return;
-    }
-    const summary = document.createElement('div');
-    summary.className = 'hint';
-    summary.textContent = 'Status: ' + body.status + (body.objective_value !== null ? ' -- objective ' + body.objective_value : '');
-    scheduleResult.appendChild(summary);
-
-    if (body.assignments.length) {
-      const table = document.createElement('table');
-      table.innerHTML = '<thead><tr><th>Shipment</th><th>Dock</th><th>Start</th><th>End</th><th></th></tr></thead>';
-      const tbody = document.createElement('tbody');
-      body.assignments
-        .slice()
-        .sort((a, b) => a.start_minutes - b.start_minutes)
-        .forEach(a => {
-          const tr = document.createElement('tr');
-          const fmt = m => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
-          tr.innerHTML = '<td>' + a.shipment_id + '</td><td>' + a.dock_id + '</td><td>' + fmt(a.start_minutes) +
-            '</td><td>' + fmt(a.end_minutes) + '</td><td class="manual">' + (a.needs_manual_approval ? 'manual approval' : '') + '</td>';
-          tbody.appendChild(tr);
-        });
-      table.appendChild(tbody);
-      scheduleResult.appendChild(table);
-    }
-
-    if (body.unscheduled_shipment_ids.length) {
-      const div = document.createElement('div');
-      div.className = 'unscheduled';
-      div.textContent = 'Not scheduled today: ' + body.unscheduled_shipment_ids.join(', ');
-      scheduleResult.appendChild(div);
-    }
-  } catch (e) {
-    scheduleError.textContent = 'Request failed: ' + e;
-  } finally {
-    scheduleBtn.disabled = false;
-  }
-}
-
 identifyBtn.addEventListener('click', identify);
 phoneInput.addEventListener('keydown', e => { if (e.key === 'Enter') identify(); });
 sendBtn.addEventListener('click', sendMessage);
 messageInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendMessage(); });
-scheduleBtn.addEventListener('click', loadSchedule);
 switchLink.addEventListener('click', e => {
   e.preventDefault();
   currentDriverId = null;

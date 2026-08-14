@@ -17,6 +17,7 @@ picking "the first option" is resolved against what was actually shown in
 this thread's last turn, re-verified for current availability, never
 against a blind fresh recompute (which could silently reorder).
 """
+import re
 from datetime import datetime
 from typing import List, Optional, Tuple
 
@@ -25,12 +26,14 @@ from app.llm_models import DriverIntent, DriverMessageIntent
 from app.models import ShipmentSummary, SlotOption
 from app.repository import (
     find_feasible_slots,
+    find_open_thread_shipment_ids,
     find_shipments_for_driver,
     get_last_offered_slot_ids,
     get_or_create_exception,
     get_or_create_open_thread,
     get_slots_by_ids,
     is_recent_duplicate_message,
+    is_slot_available_for,
     propose_booking,
     record_message,
     set_exception_status,
@@ -117,13 +120,62 @@ def _match_requested_option(options: List[SlotOption], reference: Optional[str])
     return None
 
 
+def _mentions(message_text: str, reference: Optional[str]) -> bool:
+    """Does the driver's message contain this identifier as a whole token?
+
+    Whole-token, not substring: 'SHP1006' must not be matched by a message
+    mentioning 'SHP10061'. Deliberately simple and deterministic -- this
+    runs before any LLM call, so an explicitly-quoted shipment number
+    costs nothing to honour.
+    """
+    if not reference:
+        return False
+    return re.search(r"(?<![A-Za-z0-9])" + re.escape(reference) + r"(?![A-Za-z0-9])", message_text, re.IGNORECASE) is not None
+
+
+def _resolve_shipment(conn, driver_id: str, shipments: List[ShipmentSummary], message_text: str):
+    """Pick which of a driver's shipments this message is about.
+
+    Returns (shipment, assumed) where `assumed` is True when we inferred
+    it rather than being told. Order matters:
+
+      1. The driver named it (shipment id, order reference, or the
+         destination facility we listed for them) -- believe them.
+      2. Exactly one candidate has an open conversation -- continue it,
+         but say out loud which one we assumed so they can correct us.
+      3. Otherwise ask. We never silently pick one.
+
+    Rules 1 and 2 are pure lookups, so the ambiguous path still costs no
+    LLM call.
+    """
+    if len(shipments) == 1:
+        return shipments[0], False
+
+    for shipment in shipments:
+        if (
+            _mentions(message_text, shipment.shipment_id)
+            or _mentions(message_text, shipment.order_reference)
+            or _mentions(message_text, shipment.destination_facility_id)
+        ):
+            return shipment, False
+
+    open_ids = set(find_open_thread_shipment_ids(conn, driver_id))
+    in_progress = [s for s in shipments if s.shipment_id in open_ids]
+    if len(in_progress) == 1:
+        return in_progress[0], True
+
+    return None, False
+
+
 def handle_driver_message(conn, driver_id: str, message_text: str) -> str:
     shipments = find_shipments_for_driver(conn, driver_id)
 
     if not shipments:
         return "I don't see any active shipment assigned to you today. Please contact operations directly."
 
-    if len(shipments) > 1:
+    shipment, assumed = _resolve_shipment(conn, driver_id, shipments, message_text)
+
+    if shipment is None:
         lines = "\n".join(
             "  - {} (status: {}, destination: {})".format(s.shipment_id, s.current_status, s.destination_facility_id)
             for s in shipments
@@ -131,9 +183,18 @@ def handle_driver_message(conn, driver_id: str, message_text: str) -> str:
         # Not persisted: no resolved shipment to attach a thread to yet,
         # and this reply is fully deterministic from `shipments` alone --
         # asking again next turn costs nothing and never goes stale.
-        return "You have more than one active shipment today. Which one is this about?\n{}".format(lines)
+        return (
+            "You have more than one active shipment today. Which one is this about?\n{}\n"
+            "Reply with the shipment number (e.g. {})."
+        ).format(lines, shipments[0].shipment_id)
 
-    shipment = shipments[0]
+    assumed_prefix = (
+        "(Assuming this is about {} -- tell me the shipment number if you meant the other one.)\n\n".format(
+            shipment.shipment_id
+        )
+        if assumed
+        else ""
+    )
     thread_id = get_or_create_open_thread(conn, driver_id, shipment.shipment_id)
 
     if is_recent_duplicate_message(conn, thread_id, message_text):
@@ -143,7 +204,7 @@ def handle_driver_message(conn, driver_id: str, message_text: str) -> str:
         record_message(conn, thread_id, "DRIVER", message_text, is_duplicate=True)
         reply = "Got it -- I'm already looking into your last message, no need to resend."
         record_message(conn, thread_id, "AGENT", reply)
-        return reply
+        return assumed_prefix + reply
 
     record_message(conn, thread_id, "DRIVER", message_text)
 
@@ -193,7 +254,10 @@ def handle_driver_message(conn, driver_id: str, message_text: str) -> str:
         if exc_status:
             set_exception_status(conn, exception_id, exc_status)
 
-    return reply
+    # The prefix is prepended only to what the driver sees -- the stored
+    # chat_messages row keeps the clean reply, since which shipment the
+    # thread is about is already recorded on the thread itself.
+    return assumed_prefix + reply
 
 
 def _handle_slot_request(
@@ -260,8 +324,7 @@ def _handle_choose_option(
         reply = "I couldn't tell which option you meant. Options I showed you:\n{}".format(_format_options(ordered_offered))
         return reply, stored_ids, "WAITING_FOR_DRIVER", "SLOT_OPTIONS_SHARED"
 
-    still_available = {opt.slot_id for opt in find_feasible_slots(conn, shipment.shipment_id, limit=10)}
-    if match.slot_id not in still_available:
+    if not is_slot_available_for(conn, shipment.shipment_id, match.slot_id):
         remaining = find_feasible_slots(conn, shipment.shipment_id, limit=3)
         reply = "That option ({} at {}) is no longer available. Current options:\n{}".format(
             match.dock_code, match.slot_start_ts, _format_options(remaining)
@@ -274,10 +337,18 @@ def _handle_choose_option(
 def _book(conn, shipment: ShipmentSummary, match: SlotOption) -> Tuple[str, List[str], str, str]:
     result = propose_booking(conn, shipment.shipment_id, match.slot_id)
     if result.success:
-        reply = (
-            "Requested {} at {} for you (appointment {}). This is pending warehouse "
-            "confirmation, not confirmed yet."
-        ).format(match.dock_code, match.slot_start_ts, result.appointment_id)
+        if result.replaced_appointment_id:
+            reply = (
+                "Moved you to {} at {} (appointment {}). Your earlier appointment {} has been "
+                "released. This is pending warehouse confirmation, not confirmed yet."
+            ).format(
+                match.dock_code, match.slot_start_ts, result.appointment_id, result.replaced_appointment_id
+            )
+        else:
+            reply = (
+                "Requested {} at {} for you (appointment {}). This is pending warehouse "
+                "confirmation, not confirmed yet."
+            ).format(match.dock_code, match.slot_start_ts, result.appointment_id)
         return reply, [], "WAITING_FOR_WAREHOUSE", "WAITING_CONFIRMATION"
 
     remaining = find_feasible_slots(conn, shipment.shipment_id, limit=3)
