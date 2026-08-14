@@ -46,6 +46,17 @@ _PROVIDERS = {
         # burning credits. Raise or drop once this is more than a dev key.
         "max_tokens": 300,
     },
+    # Local dev only -- runs against a local Ollama server, no API key,
+    # no cost, no network call leaving the machine. Needs `ollama serve`
+    # running and the model pulled (`ollama pull qwen3:8b`). Not meant for
+    # production use -- kept purely so a developer can iterate/test without
+    # spending real provider credits.
+    "ollama": {
+        "model": "qwen3:8b",
+        "model_provider": "ollama",
+        "base_url_env": "OLLAMA_BASE_URL",  # optional, defaults below if unset
+        "base_url_default": "http://localhost:11434",
+    },
 }
 
 DEFAULT_PROVIDER = "google_genai"
@@ -74,6 +85,11 @@ def get_chat_model(provider: Optional[str] = None, **overrides):
                 "Provider '{}' needs {} set in the environment (.env).".format(provider, api_key_env)
             )
         config["api_key"] = api_key
+
+    base_url_env = config.pop("base_url_env", None)
+    base_url_default = config.pop("base_url_default", None)
+    if base_url_env:
+        config["base_url"] = os.environ.get(base_url_env, base_url_default)
 
     config.update(overrides)
     return init_chat_model(**config)

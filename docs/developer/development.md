@@ -48,6 +48,20 @@ confirmed working. The `openrouter` entry in `app/llm.py` sets
 Raise or remove it once this is more than a dev key; don't quietly widen
 it while it's still a shared low-credit key.
 
+### `ollama` provider (local dev only)
+
+`LLM_PROVIDER=ollama` runs against a local [Ollama](https://ollama.com)
+server instead of a hosted API -- no key, no cost, nothing leaves the
+machine. Needs `ollama serve` running and the model pulled:
+
+```powershell
+ollama pull qwen3:8b
+```
+
+Set `OLLAMA_BASE_URL` in `.env` only if your server isn't at the default
+`http://localhost:11434`. This provider is for local iteration -- it's
+not something to point production at.
+
 ## Database
 
 The tracked source of truth is `db/schema_and_seed.sql`. The actual SQLite
