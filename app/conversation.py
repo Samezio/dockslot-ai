@@ -27,11 +27,23 @@ from app.repository import (
     find_feasible_slots,
     find_shipments_for_driver,
     get_last_offered_slot_ids,
+    get_or_create_exception,
     get_or_create_open_thread,
     get_slots_by_ids,
     propose_booking,
     record_message,
+    set_exception_status,
     set_thread_state,
+)
+
+# Intents that represent (or continue) an operational exception worth a
+# driver_exceptions row. CHECK_STATUS/GENERAL_QUESTION/UNKNOWN don't --
+# they're not reporting or acting on a delay.
+_EXCEPTION_INTENTS = (
+    DriverIntent.REPORT_DELAY,
+    DriverIntent.ASK_SLOT_OPTIONS,
+    DriverIntent.EARLY_ARRIVAL,
+    DriverIntent.CHOOSE_OPTION,
 )
 
 # The seed data is a frozen single-day operational snapshot (see
@@ -127,11 +139,11 @@ def handle_driver_message(conn, driver_id: str, message_text: str) -> str:
     intent = extract_intent(message_text, shipment_context=_shipment_context_text(shipment))
 
     if intent.intent in (DriverIntent.REPORT_DELAY, DriverIntent.ASK_SLOT_OPTIONS, DriverIntent.EARLY_ARRIVAL):
-        reply, offered_ids, status = _handle_slot_request(conn, shipment, intent)
+        reply, offered_ids, status, exc_status = _handle_slot_request(conn, shipment, intent)
     elif intent.intent == DriverIntent.CHOOSE_OPTION:
-        reply, offered_ids, status = _handle_choose_option(conn, thread_id, shipment, intent)
+        reply, offered_ids, status, exc_status = _handle_choose_option(conn, thread_id, shipment, intent)
     elif intent.intent == DriverIntent.CHECK_STATUS:
-        reply, offered_ids, status = _handle_check_status(shipment), [], None
+        reply, offered_ids, status, exc_status = _handle_check_status(shipment), [], None, None
     else:
         # GENERAL_QUESTION / UNKNOWN
         if intent.missing_information:
@@ -141,7 +153,7 @@ def handle_driver_message(conn, driver_id: str, message_text: str) -> str:
                 "I'm not able to help with that from chat. If this needs a decision beyond "
                 "appointment scheduling, please contact operations directly."
             )
-        offered_ids, status = [], None
+        offered_ids, status, exc_status = [], None, None
 
     record_message(
         conn,
@@ -155,14 +167,30 @@ def handle_driver_message(conn, driver_id: str, message_text: str) -> str:
     if status:
         set_thread_state(conn, thread_id, status, intent.intent.value)
 
+    if intent.intent in _EXCEPTION_INTENTS:
+        exception_type = "EARLY_ARRIVAL" if intent.intent == DriverIntent.EARLY_ARRIVAL else "DELAY"
+        exception_id = get_or_create_exception(
+            conn,
+            thread_id,
+            driver_id,
+            shipment.shipment_id,
+            exception_type,
+            description=message_text,
+            declared_eta_ts=_to_iso(intent.declared_eta_local_time) if intent.declared_eta_local_time else shipment.effective_eta_ts,
+            priority_code=shipment.priority_code,
+        )
+        if exc_status:
+            set_exception_status(conn, exception_id, exc_status)
+
     return reply
 
 
 def _handle_slot_request(
     conn, shipment: ShipmentSummary, intent: DriverMessageIntent
-) -> Tuple[str, List[str], str]:
+) -> Tuple[str, List[str], str, str]:
     if intent.declared_eta_local_time is None and intent.missing_information:
-        return "Before I can check options: {}".format("; ".join(intent.missing_information)), [], "WAITING_FOR_DRIVER"
+        reply = "Before I can check options: {}".format("; ".join(intent.missing_information))
+        return reply, [], "WAITING_FOR_DRIVER", "NEEDS_INFORMATION"
 
     after_ts = _to_iso(intent.declared_eta_local_time) if intent.declared_eta_local_time else None
     effective_after = after_ts or shipment.effective_eta_ts
@@ -175,7 +203,7 @@ def _handle_slot_request(
         reply = "Your current appointment ({} - {}) still works based on that arrival time -- no change needed.".format(
             shipment.current_slot_start_ts, shipment.current_slot_end_ts
         )
-        return reply, [], "RESOLVED"
+        return reply, [], "RESOLVED", "RESOLVED"
 
     options = find_feasible_slots(conn, shipment.shipment_id, after_ts=after_ts, limit=3)
     if not options:
@@ -183,18 +211,18 @@ def _handle_slot_request(
             "I can't find a feasible same-day slot for this shipment after your declared arrival time. "
             "This needs operations review -- escalating rather than guessing."
         )
-        return reply, [], "ESCALATED"
+        return reply, [], "ESCALATED", "ESCALATED"
 
     reply = (
         "Your original slot no longer works. Here are the next feasible options "
         "(not booked yet -- reply with which one you'd like):\n{}"
     ).format(_format_options(options))
-    return reply, [opt.slot_id for opt in options], "WAITING_FOR_DRIVER"
+    return reply, [opt.slot_id for opt in options], "WAITING_FOR_DRIVER", "SLOT_OPTIONS_SHARED"
 
 
 def _handle_choose_option(
     conn, thread_id: str, shipment: ShipmentSummary, intent: DriverMessageIntent
-) -> Tuple[str, List[str], str]:
+) -> Tuple[str, List[str], str, str]:
     stored_ids = get_last_offered_slot_ids(conn, thread_id)
 
     if not stored_ids:
@@ -205,9 +233,10 @@ def _handle_choose_option(
         match = _match_requested_option(options, intent.requested_slot_reference)
         if match is None:
             if not options:
-                return "There are no feasible slots to choose from right now -- this needs operations review.", [], "ESCALATED"
+                reply = "There are no feasible slots to choose from right now -- this needs operations review."
+                return reply, [], "ESCALATED", "ESCALATED"
             reply = "I couldn't tell which option you meant. Current options:\n{}".format(_format_options(options))
-            return reply, [opt.slot_id for opt in options], "WAITING_FOR_DRIVER"
+            return reply, [opt.slot_id for opt in options], "WAITING_FOR_DRIVER", "SLOT_OPTIONS_SHARED"
         return _book(conn, shipment, match)
 
     # Resolve the reference against what was ACTUALLY shown, in that
@@ -218,7 +247,7 @@ def _handle_choose_option(
     match = _match_requested_option(ordered_offered, intent.requested_slot_reference)
     if match is None:
         reply = "I couldn't tell which option you meant. Options I showed you:\n{}".format(_format_options(ordered_offered))
-        return reply, stored_ids, "WAITING_FOR_DRIVER"
+        return reply, stored_ids, "WAITING_FOR_DRIVER", "SLOT_OPTIONS_SHARED"
 
     still_available = {opt.slot_id for opt in find_feasible_slots(conn, shipment.shipment_id, limit=10)}
     if match.slot_id not in still_available:
@@ -226,23 +255,23 @@ def _handle_choose_option(
         reply = "That option ({} at {}) is no longer available. Current options:\n{}".format(
             match.dock_code, match.slot_start_ts, _format_options(remaining)
         )
-        return reply, [opt.slot_id for opt in remaining], "WAITING_FOR_DRIVER"
+        return reply, [opt.slot_id for opt in remaining], "WAITING_FOR_DRIVER", "SLOT_OPTIONS_SHARED"
 
     return _book(conn, shipment, match)
 
 
-def _book(conn, shipment: ShipmentSummary, match: SlotOption) -> Tuple[str, List[str], str]:
+def _book(conn, shipment: ShipmentSummary, match: SlotOption) -> Tuple[str, List[str], str, str]:
     result = propose_booking(conn, shipment.shipment_id, match.slot_id)
     if result.success:
         reply = (
             "Requested {} at {} for you (appointment {}). This is pending warehouse "
             "confirmation, not confirmed yet."
         ).format(match.dock_code, match.slot_start_ts, result.appointment_id)
-        return reply, [], "WAITING_FOR_WAREHOUSE"
+        return reply, [], "WAITING_FOR_WAREHOUSE", "WAITING_CONFIRMATION"
 
     remaining = find_feasible_slots(conn, shipment.shipment_id, limit=3)
     reply = "{} Here are the current alternatives:\n{}".format(result.reason, _format_options(remaining))
-    return reply, [opt.slot_id for opt in remaining], "WAITING_FOR_DRIVER"
+    return reply, [opt.slot_id for opt in remaining], "WAITING_FOR_DRIVER", "SLOT_OPTIONS_SHARED"
 
 
 def _handle_check_status(shipment: ShipmentSummary) -> str:

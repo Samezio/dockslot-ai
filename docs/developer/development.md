@@ -98,6 +98,14 @@ above) and will incur provider API cost/latency each run.
 python scripts\chat.py [DRIVER_ID]
 ```
 
+`scripts/chat.py` is the actual interactive way to use this -- an
+in-terminal chat loop. It asks for your phone number and looks you up
+(no default driver -- mirrors how a real channel like WhatsApp would
+identify the sender). `/switch` to re-identify, `/quit` to exit. Seeded
+phone numbers are in `drivers.phone` (e.g. `9000010006` = DRV006, Manoj
+Sharma); `--driver DRV0xx` skips identification as a dev shortcut and
+says so. Same as `chat_demo.py`, this calls a real LLM per message.
+
 ```powershell
 python scripts\concurrency_demo.py
 ```
@@ -108,10 +116,15 @@ together), not just sequential calls. Offline/deterministic -- no API key
 needed. Rebuilds `data/dockslot.db` itself (twice, once per scenario), so
 don't run it against a DB state you care about keeping.
 
-`scripts/chat.py` is the actual interactive way to use this -- an
-in-terminal chat loop. It asks for your phone number and looks you up
-(no default driver -- mirrors how a real channel like WhatsApp would
-identify the sender). `/switch` to re-identify, `/quit` to exit. Seeded
-phone numbers are in `drivers.phone` (e.g. `9000010006` = DRV006, Manoj
-Sharma); `--driver DRV0xx` skips identification as a dev shortcut and
-says so. Same as `chat_demo.py`, this calls a real LLM per message.
+## Automated tests
+
+```powershell
+pip install -r requirements-dev.txt
+pytest -q
+```
+
+Deterministic only -- no LLM calls, runs in well under a second, safe in
+CI. Each test gets its own fresh `:memory:` DB (or temp file DB, for the
+concurrency test) built from `db/schema_and_seed.sql` -- never touches
+`data/dockslot.db`. Run after any change to `app/repository.py` or
+`app/conversation.py`'s pure-function helpers.

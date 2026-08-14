@@ -147,8 +147,15 @@ Ambiguous-driver replies (multiple active shipments) are deliberately
 and the reply is fully deterministic from `find_shipments_for_driver`
 alone, so re-asking costs nothing and can't go stale.
 
-`driver_exceptions` is not wired up yet -- still open, see "Not built
-yet" below.
+`driver_exceptions` is now wired up too: one exception record per thread
+(`get_or_create_exception`, reused across turns like the thread itself),
+created for REPORT_DELAY/ASK_SLOT_OPTIONS/EARLY_ARRIVAL/CHOOSE_OPTION (not
+for CHECK_STATUS or general questions -- those aren't reporting or acting
+on a delay). `exception_type`/`description`/`severity_code` (mapped from
+the shipment's `priority_code`) are set once at first report;
+`exception_status` moves each turn via `set_exception_status`, mirrored
+1:1 with the reply actually given (`SLOT_OPTIONS_SHARED`,
+`WAITING_CONFIRMATION`, `RESOLVED`, `ESCALATED`, `NEEDS_INFORMATION`).
 
 ### Provider abstraction (`app/llm.py`)
 
@@ -188,17 +195,30 @@ resolves to exactly one winner, verified by querying `appointments`
 directly afterward -- not by trusting the Python-level return values.
 No LLM involved.
 
+## Automated tests
+
+`tests/` -- pytest, deterministic only (no LLM calls, no network). Each
+test gets a fresh `:memory:` DB from `db/schema_and_seed.sql`
+(`tests/conftest.py`), except `tests/test_concurrency.py` which needs a
+real temp *file* DB to test genuine multi-connection/multi-thread access
+(`:memory:` doesn't share across connections without special URI
+handling). `scripts/demo.py`, `scripts/concurrency_demo.py`, and
+`scripts/chat_demo.py` remain as narrated walkthroughs -- useful for
+watching what happens, not a substitute for `pytest`. Run: `pytest -q`
+(needs `requirements-dev.txt`).
+
 ## Not built yet
 
-- `driver_exceptions` persistence -- `chat_threads`/`chat_messages` are
-  wired up (see above); the exception-level record (type, severity,
-  dedupe key) isn't yet.
 - Any web/API surface (FastAPI etc.) -- deferred until there's a reason to
   serve this over HTTP (e.g. a real chat channel) rather than call it
   in-process.
 - The optional facility-wide scheduling-engine extension from the brief
   (§7.3) -- explicitly out of scope for the first working slice.
-- Automated tests (`tests/`) -- `scripts/demo.py` (deterministic layer) and
-  `scripts/chat_demo.py` (conversational layer, hits a real LLM) currently
-  play that role as narrated walkthroughs; promote their scenarios into
-  real tests once the shape of both layers stabilizes.
+- Duplicate-message detection (`chat_messages.is_duplicate`,
+  `driver_exceptions.dedupe_key` exist in the schema for this; not read
+  or written by app code yet).
+- Tests for the conversational layer itself (`app/conversation.py`'s
+  orchestration, `app/intent.py`) -- covered manually via
+  `scripts/chat_demo.py` today since they need a live LLM call;
+  `tests/test_conversation_helpers.py` covers the pure-function pieces
+  (option matching, time parsing) without one.

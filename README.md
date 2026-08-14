@@ -22,5 +22,6 @@ python scripts\chat.py       # interactive chat -- talk to it yourself, calls a 
 ## Docs
 
 - [docs/developer/architecture.md](docs/developer/architecture.md) — system design, layers, key decisions
-- [docs/developer/development.md](docs/developer/development.md) — local setup, running, rebuilding the DB
+- [docs/developer/development.md](docs/developer/development.md) — local setup, running, rebuilding the DB, tests
+- [docs/developer/roadmap.md](docs/developer/roadmap.md) — what's done, what's next
 - [docs/ai-agent/context.md](docs/ai-agent/context.md) — project state and conventions for AI coding agents

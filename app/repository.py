@@ -278,6 +278,63 @@ def set_thread_state(conn: sqlite3.Connection, thread_id: str, status: str, inte
     conn.commit()
 
 
+_SEVERITY_BY_PRIORITY = {"CRITICAL": "CRITICAL", "HIGH": "HIGH", "NORMAL": "MEDIUM", "LOW": "LOW"}
+
+
+def get_or_create_exception(
+    conn: sqlite3.Connection,
+    thread_id: str,
+    driver_id: str,
+    shipment_id: str,
+    exception_type: str,
+    description: str,
+    declared_eta_ts: Optional[str],
+    priority_code: str,
+) -> str:
+    """One exception record per thread, reused across turns (its
+    exception_type/description are set once, at first report; only its
+    status moves via set_exception_status). Mirrors the 1:1 thread<->
+    exception pattern already in the seed data (e.g. THR001/EXC001)."""
+    row = conn.execute(
+        "SELECT exception_id FROM driver_exceptions WHERE thread_id = ? ORDER BY reported_at DESC LIMIT 1",
+        (thread_id,),
+    ).fetchone()
+    if row:
+        return row["exception_id"]
+
+    exception_id = "EXC-{}".format(uuid.uuid4().hex[:8].upper())
+    now = _now_ist_iso()
+    dedupe_key = "{}-{}-{}".format(driver_id, shipment_id or "UNKNOWN", now)
+    conn.execute(
+        """
+        INSERT INTO driver_exceptions (
+            exception_id, shipment_id, driver_id, thread_id, exception_type, reported_at,
+            reported_delay_min, declared_eta_ts, earliest_acceptable_ts, latest_acceptable_ts,
+            severity_code, exception_status, description, dedupe_key
+        ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL, ?, 'OPEN', ?, ?)
+        """,
+        (
+            exception_id,
+            shipment_id,
+            driver_id,
+            thread_id,
+            exception_type,
+            now,
+            declared_eta_ts,
+            _SEVERITY_BY_PRIORITY.get(priority_code, "MEDIUM"),
+            description,
+            dedupe_key,
+        ),
+    )
+    conn.commit()
+    return exception_id
+
+
+def set_exception_status(conn: sqlite3.Connection, exception_id: str, status: str) -> None:
+    conn.execute("UPDATE driver_exceptions SET exception_status = ? WHERE exception_id = ?", (status, exception_id))
+    conn.commit()
+
+
 def record_message(
     conn: sqlite3.Connection,
     thread_id: str,

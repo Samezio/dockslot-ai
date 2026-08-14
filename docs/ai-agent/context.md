@@ -13,12 +13,16 @@ Built: the deterministic operational layer (`app/db.py`, `app/models.py`,
 lookup (no hardcoded default) and conversation state persisted via
 `chat_threads`/`chat_messages` (see architecture.md).
 
-And `scripts/concurrency_demo.py`: proves the DB guard under real
-concurrent access (threads + separate connections + a `threading.Barrier`),
-not just sequential calls.
+`driver_exceptions` is wired up too (one record per thread, status mirrors
+the reply). `scripts/concurrency_demo.py` + `tests/test_concurrency.py`
+prove the DB guard under real concurrent access (threads + separate
+connections + a `threading.Barrier`), not just sequential calls. `tests/`
+(pytest, deterministic, no LLM) covers the repository layer and
+`app/conversation.py`'s pure-function helpers.
 
-Not built: `driver_exceptions` persistence, any web/API surface, automated
-tests, the optional scheduling-engine extension.
+Not built: tests for the conversational layer itself (needs a live LLM
+call), duplicate-message detection, any web/API surface, the optional
+scheduling-engine extension. Full status: `docs/developer/roadmap.md`.
 
 ## LLM provider
 
@@ -96,6 +100,19 @@ checking.
   another value, the CHECK constraint needs the same update or inserts
   using it will fail with `IntegrityError` (this happened once already,
   live, via `set_thread_state`).
+- **`driver_exceptions` is one record per thread**, reused across turns
+  like the thread itself (`get_or_create_exception`). `exception_type`/
+  `description`/`severity_code` are set once at first report and don't
+  change on follow-ups; only `exception_status` moves each turn
+  (`set_exception_status`), mirrored 1:1 with the reply actually given.
+  Only created for REPORT_DELAY/ASK_SLOT_OPTIONS/EARLY_ARRIVAL/
+  CHOOSE_OPTION -- not CHECK_STATUS or general questions.
+- **Automated tests are deterministic-only, no LLM calls** (`tests/`,
+  pytest). Each test gets its own fresh DB built from
+  `db/schema_and_seed.sql` -- `:memory:` normally, a temp file DB in
+  `tests/test_concurrency.py` (needed for genuine multi-connection
+  access). Don't add a test that calls a real LLM provider -- that's what
+  `scripts/chat_demo.py` is for, run manually.
 - **`.project_details/` is gitignored** (it holds the original challenge
   PDF and a nested zip of the data package). Nothing in the tracked repo
   should depend on it existing -- `db/schema_and_seed.sql` is the durable,
