@@ -13,6 +13,7 @@ from app.repository import (
     get_shipment,
     is_recent_duplicate_message,
     is_slot_available_for,
+    list_recent_reschedules,
     propose_booking,
     record_message,
 )
@@ -213,6 +214,28 @@ def test_reschedule_replaces_existing_appointment_and_frees_the_old_slot(conn):
         "SELECT availability_status FROM v_slot_availability WHERE slot_id = 'SLOT-JAI-005'"
     ).fetchone()
     assert freed["availability_status"] == "AVAILABLE"
+
+
+def test_list_recent_reschedules_surfaces_a_completed_reschedule(conn):
+    # Same reschedule as above (admin portal, app/api.py's
+    # /admin/api/reschedules/recent) -- nothing is persisted separately for
+    # this view, so a reschedule must show up purely from the
+    # replaced_appointment_id chain propose_booking already writes.
+    assert list_recent_reschedules(conn) == []  # seed data has no reschedules yet
+
+    original = get_current_appointment_id(conn, "SHP1017")
+    options = find_feasible_slots(conn, "SHP1017", after_ts="2026-08-04T15:00:00+05:30", limit=1)
+    result = propose_booking(conn, "SHP1017", options[0].slot_id)
+    assert result.success
+
+    rows = list_recent_reschedules(conn)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["appointment_id"] == result.appointment_id
+    assert row["shipment_id"] == "SHP1017"
+    assert row["driver_name"] == "Rajesh Kumar"
+    assert row["old_dock_code"] == "D1"  # SLOT-JAI-005 is on DOCK-JAI-D1
+    assert row["new_dock_code"] is not None
 
 
 def test_failed_reschedule_leaves_the_original_appointment_intact(conn):

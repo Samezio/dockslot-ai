@@ -16,7 +16,16 @@ def get_connection():
         raise FileNotFoundError(
             "{} does not exist yet. Run `python scripts/build_db.py` first.".format(DB_PATH)
         )
-    conn = sqlite3.connect(str(DB_PATH))
+    # check_same_thread=False: FastAPI resolves the get_db dependency and
+    # runs the route handler as two separate calls into its threadpool,
+    # which anyio doesn't guarantee land on the same worker thread -- under
+    # concurrent requests they sometimes don't, and sqlite3 raises
+    # ProgrammingError by default if a connection crosses threads. Safe to
+    # relax here: each request still gets its own connection (see this
+    # function's docstring), so there's still exactly one thread touching
+    # it at a time -- just not always the same *named* thread across the
+    # life of that one connection.
+    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn

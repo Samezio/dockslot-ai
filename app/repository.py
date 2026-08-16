@@ -574,6 +574,204 @@ def get_last_offered_slot_ids(conn: sqlite3.Connection, thread_id: str) -> List[
     return row["offered_slot_ids"].split(",")
 
 
+# --- Admin portal read-only queries -------------------------------------
+# Everything below backs app/api.py's /admin/api/* routes (see
+# app/admin_auth.py for the login/session layer). These are pure
+# projections for a human dispatcher to browse -- unlike the rest of this
+# module, nothing here is reused by the driver-chat or scheduling paths,
+# so returning raw sqlite3.Row objects (rather than a dataclass, see
+# app/models.py's docstring) is simpler and loses nothing: app/api.py
+# converts each row straight into its one Pydantic response model.
+
+
+def list_shipments_for_admin(
+    conn: sqlite3.Connection,
+    status: Optional[str] = None,
+    facility_id: Optional[str] = None,
+    search: Optional[str] = None,
+    limit: int = 200,
+) -> List[sqlite3.Row]:
+    """Browsable shipment list, most imminent ETA first. `search` matches
+    shipment_id, order_reference, or customer_name (substring, case-
+    insensitive via SQLite's default LIKE collation)."""
+    conditions = []
+    params: List[str] = []
+    if status:
+        conditions.append("s.current_status = ?")
+        params.append(status)
+    if facility_id:
+        conditions.append("s.destination_facility_id = ?")
+        params.append(facility_id)
+    if search:
+        conditions.append("(s.shipment_id LIKE ? OR s.order_reference LIKE ? OR s.customer_name LIKE ?)")
+        like = "%{}%".format(search)
+        params.extend([like, like, like])
+    where = "WHERE " + " AND ".join(conditions) if conditions else ""
+
+    rows = conn.execute(
+        """
+        SELECT
+            s.shipment_id, s.order_reference, s.current_status, s.priority_code,
+            s.destination_facility_id, f.facility_name,
+            s.driver_id, dr.driver_name,
+            le.effective_eta_ts, le.eta_confidence
+        FROM shipments s
+        JOIN facilities f ON f.facility_id = s.destination_facility_id
+        JOIN drivers dr ON dr.driver_id = s.driver_id
+        JOIN v_latest_eta le ON le.shipment_id = s.shipment_id
+        {where}
+        ORDER BY le.effective_eta_ts
+        LIMIT ?
+        """.format(where=where),
+        params + [limit],
+    ).fetchall()
+    return rows
+
+
+def get_shipment_admin_detail(conn: sqlite3.Connection, shipment_id: str) -> Optional[sqlite3.Row]:
+    """Everything the admin shipment-detail view needs in one row: the
+    shipment plus its driver, vehicle, destination facility, latest ETA,
+    and current appointment/dock/checkin state (all left joins, since a
+    shipment may not have an active appointment or a checkin yet)."""
+    return conn.execute(
+        """
+        SELECT
+            s.*,
+            dr.driver_name, dr.phone AS driver_phone, dr.driver_status,
+            v.registration_number, v.vehicle_type_code,
+            f.facility_name, f.city AS facility_city, f.state AS facility_state,
+            le.effective_eta_ts, le.eta_source, le.eta_confidence, le.eta_note, le.delay_reason_code,
+            ap.appointment_id, ap.appointment_status, ap.booking_source,
+            sl.slot_start_ts, sl.slot_end_ts, d.dock_code,
+            fc.gate_in_ts, fc.queue_state, fc.queue_position, fc.arrival_state
+        FROM shipments s
+        JOIN drivers dr ON dr.driver_id = s.driver_id
+        JOIN vehicles v ON v.vehicle_id = s.vehicle_id
+        JOIN facilities f ON f.facility_id = s.destination_facility_id
+        JOIN v_latest_eta le ON le.shipment_id = s.shipment_id
+        LEFT JOIN appointments ap
+            ON ap.shipment_id = s.shipment_id AND ap.is_current = 1
+           AND ap.appointment_status IN ('PENDING_CONFIRMATION','CONFIRMED','IN_PROGRESS')
+        LEFT JOIN appointment_slots sl ON sl.slot_id = ap.slot_id
+        LEFT JOIN docks d ON d.dock_id = sl.dock_id
+        LEFT JOIN facility_checkins fc ON fc.shipment_id = s.shipment_id
+        WHERE s.shipment_id = ?
+        """,
+        (shipment_id,),
+    ).fetchone()
+
+
+def list_drivers_for_admin(conn: sqlite3.Connection, search: Optional[str] = None, limit: int = 200) -> List[sqlite3.Row]:
+    conditions = []
+    params: List[str] = []
+    if search:
+        conditions.append("(dr.driver_id LIKE ? OR dr.driver_name LIKE ? OR dr.phone LIKE ?)")
+        like = "%{}%".format(search)
+        params.extend([like, like, like])
+    where = "WHERE " + " AND ".join(conditions) if conditions else ""
+
+    rows = conn.execute(
+        """
+        SELECT dr.driver_id, dr.driver_name, dr.phone, dr.driver_status,
+               dr.home_base_city, dr.carrier_id, c.carrier_name
+        FROM drivers dr
+        JOIN carriers c ON c.carrier_id = dr.carrier_id
+        {where}
+        ORDER BY dr.driver_name
+        LIMIT ?
+        """.format(where=where),
+        params + [limit],
+    ).fetchall()
+    return rows
+
+
+def get_driver_admin_detail(conn: sqlite3.Connection, driver_id: str) -> Optional[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT dr.*, c.carrier_name
+        FROM drivers dr
+        JOIN carriers c ON c.carrier_id = dr.carrier_id
+        WHERE dr.driver_id = ?
+        """,
+        (driver_id,),
+    ).fetchone()
+
+
+def list_all_shipments_for_driver(conn: sqlite3.Connection, driver_id: str) -> List[sqlite3.Row]:
+    """Every shipment for this driver, including COMPLETED/CANCELLED --
+    unlike find_shipments_for_driver (the driver-chat's active to-do
+    list), the admin detail view is a history."""
+    return conn.execute(
+        """
+        SELECT s.shipment_id, s.order_reference, s.current_status,
+               s.destination_facility_id, f.facility_name, s.priority_code,
+               le.effective_eta_ts
+        FROM shipments s
+        JOIN facilities f ON f.facility_id = s.destination_facility_id
+        JOIN v_latest_eta le ON le.shipment_id = s.shipment_id
+        WHERE s.driver_id = ?
+        ORDER BY le.effective_eta_ts DESC
+        """,
+        (driver_id,),
+    ).fetchall()
+
+
+def list_facilities_for_admin(conn: sqlite3.Connection) -> List[sqlite3.Row]:
+    return conn.execute("SELECT * FROM facilities ORDER BY facility_name").fetchall()
+
+
+def get_facility_admin_detail(conn: sqlite3.Connection, facility_id: str) -> Optional[sqlite3.Row]:
+    return conn.execute("SELECT * FROM facilities WHERE facility_id = ?", (facility_id,)).fetchone()
+
+
+def list_docks_for_admin(conn: sqlite3.Connection, facility_id: str) -> List[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM docks WHERE facility_id = ? ORDER BY dock_code", (facility_id,)
+    ).fetchall()
+
+
+def list_facility_contacts(conn: sqlite3.Connection, facility_id: str) -> List[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT contact_role, contact_name, email, phone
+        FROM facility_contacts
+        WHERE facility_id = ? AND active_flag = 1
+        ORDER BY contact_role
+        """,
+        (facility_id,),
+    ).fetchall()
+
+
+def list_recent_reschedules(conn: sqlite3.Connection, limit: int = 20) -> List[sqlite3.Row]:
+    """Reschedule events, derived live from the appointments table's own
+    replaced_appointment_id chain (set by propose_booking's reschedule
+    path -- see that function's docstring). There is no separate
+    reschedule-log table and this doesn't need one: everything shown here
+    was already durably written by propose_booking, so the admin view can
+    just query it fresh on every request instead of duplicating it."""
+    return conn.execute(
+        """
+        SELECT
+            new_ap.appointment_id, new_ap.shipment_id, new_ap.booking_source, new_ap.booked_at,
+            s.order_reference, dr.driver_name,
+            old_dock.dock_code AS old_dock_code, old_sl.slot_start_ts AS old_slot_start_ts, old_sl.slot_end_ts AS old_slot_end_ts,
+            new_dock.dock_code AS new_dock_code, new_sl.slot_start_ts AS new_slot_start_ts, new_sl.slot_end_ts AS new_slot_end_ts
+        FROM appointments new_ap
+        JOIN appointments old_ap ON old_ap.appointment_id = new_ap.replaced_appointment_id
+        JOIN shipments s ON s.shipment_id = new_ap.shipment_id
+        JOIN drivers dr ON dr.driver_id = s.driver_id
+        JOIN appointment_slots old_sl ON old_sl.slot_id = old_ap.slot_id
+        JOIN docks old_dock ON old_dock.dock_id = old_sl.dock_id
+        JOIN appointment_slots new_sl ON new_sl.slot_id = new_ap.slot_id
+        JOIN docks new_dock ON new_dock.dock_id = new_sl.dock_id
+        WHERE new_ap.replaced_appointment_id IS NOT NULL
+        ORDER BY new_ap.booked_at DESC, new_ap.rowid DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+
+
 def get_slots_by_ids(conn: sqlite3.Connection, slot_ids: List[str]) -> Dict[str, SlotOption]:
     """Dock/time info for specific slots regardless of current
     availability -- lets a caller resolve "the first option" against what

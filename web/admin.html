@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dockslot-ai — admin</title>
+<style>
+  :root {
+    --bg: #0f172a; --panel: #1e293b; --border: #334155;
+    --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8;
+    --accent-text: #0f172a; --error: #f87171; --warn: #fbbf24; --ok: #4ade80;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+    background: var(--bg); color: var(--text);
+    display: flex; flex-direction: column; align-items: center;
+    min-height: 100vh; padding: 24px 12px;
+  }
+  header { width: 100%; max-width: 1100px; display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px; }
+  h1 { font-size: 1.25rem; margin: 0; }
+  .subtitle { color: var(--muted); font-size: 0.85rem; margin-bottom: 20px; }
+  main { width: 100%; max-width: 1100px; display: flex; flex-direction: column; gap: 16px; }
+  section {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px;
+  }
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tab {
+    padding: 7px 14px; border-radius: 6px; border: 1px solid var(--border);
+    background: transparent; color: var(--text); cursor: pointer; font-size: 0.85rem;
+  }
+  .tab.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+  label { font-size: 0.8rem; color: var(--muted); display: block; margin-bottom: 4px; }
+  input[type=text], select {
+    padding: 7px 9px; border-radius: 6px;
+    border: 1px solid var(--border); background: #0b1220;
+    color: var(--text); font-size: 0.9rem;
+  }
+  .filters { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 12px; }
+  button.action {
+    padding: 7px 14px; border-radius: 6px; border: none;
+    background: var(--accent); color: var(--accent-text);
+    font-weight: 600; cursor: pointer; font-size: 0.85rem;
+  }
+  button.action:hover { filter: brightness(1.1); }
+  button.link {
+    background: none; border: none; color: var(--accent); cursor: pointer;
+    font-size: inherit; padding: 0; text-decoration: underline;
+  }
+  button.logout { background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; }
+  button.logout:hover { color: var(--text); border-color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+  tr.clickable { cursor: pointer; }
+  tr.clickable:hover td { background: #263449; }
+  .muted { color: var(--muted); }
+  .error { color: var(--error); font-size: 0.85rem; margin-top: 8px; }
+  .empty { color: var(--muted); font-size: 0.85rem; padding: 12px 0; }
+  .status-pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 0.75rem; border: 1px solid var(--border); }
+  .detail-box { margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--border); }
+  .detail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px 20px; font-size: 0.85rem; }
+  .detail-grid div span.k { display: block; color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.03em; }
+  .close-detail { margin-top: 12px; }
+  .facility-card { margin-bottom: 14px; }
+  .facility-card h3 { margin: 0 0 6px; font-size: 1rem; }
+  .footer-link { margin-top: 20px; font-size: 0.8rem; color: var(--muted); }
+  .footer-link a { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>dockslot-ai — admin</h1>
+  <button class="logout" id="logoutBtn">Log out</button>
+</header>
+<div class="subtitle">Shipments, drivers, docks/facilities, recent reschedules</div>
+
+<main>
+  <section>
+    <div class="tabs">
+      <button class="tab active" data-tab="shipments">Shipments</button>
+      <button class="tab" data-tab="drivers">Drivers</button>
+      <button class="tab" data-tab="facilities">Docks &amp; facilities</button>
+      <button class="tab" data-tab="reschedules">Recent reschedules</button>
+    </div>
+  </section>
+
+  <!-- Shipments -->
+  <section class="tab-panel active" id="panel-shipments">
+    <div class="filters">
+      <div>
+        <label for="shpSearch">Search</label>
+        <input type="text" id="shpSearch" placeholder="shipment / order ref / customer">
+      </div>
+      <div>
+        <label for="shpStatus">Status</label>
+        <select id="shpStatus">
+          <option value="">Any</option>
+          <option>PLANNED</option><option>ASSIGNED</option><option>IN_TRANSIT</option>
+          <option>AT_GATE</option><option>WAITING</option><option>IN_DOCK</option>
+          <option>COMPLETED</option><option>CANCELLED</option>
+        </select>
+      </div>
+      <div>
+        <label for="shpFacility">Facility</label>
+        <select id="shpFacility"><option value="">Any</option></select>
+      </div>
+      <button class="action" id="shpFilterBtn">Filter</button>
+    </div>
+    <div id="shpError" class="error"></div>
+    <div id="shpTableWrap"></div>
+    <div id="shpDetail"></div>
+  </section>
+
+  <!-- Drivers -->
+  <section class="tab-panel" id="panel-drivers">
+    <div class="filters">
+      <div>
+        <label for="drvSearch">Search</label>
+        <input type="text" id="drvSearch" placeholder="driver id / name / phone">
+      </div>
+      <button class="action" id="drvFilterBtn">Filter</button>
+    </div>
+    <div id="drvError" class="error"></div>
+    <div id="drvTableWrap"></div>
+    <div id="drvDetail"></div>
+  </section>
+
+  <!-- Facilities & docks -->
+  <section class="tab-panel" id="panel-facilities">
+    <div id="facError" class="error"></div>
+    <div id="facList"></div>
+  </section>
+
+  <!-- Recent reschedules -->
+  <section class="tab-panel" id="panel-reschedules">
+    <div class="filters">
+      <button class="action" id="reschRefreshBtn">Refresh</button>
+    </div>
+    <div id="reschError" class="error"></div>
+    <div id="reschTableWrap"></div>
+  </section>
+</main>
+
+<div class="footer-link">
+  Driver chat is at <a href="/">/</a> · dispatcher schedule view is at <a href="/ops">/ops</a>.
+</div>
+
+<script>
+// --- shared helpers -------------------------------------------------
+async function apiGet(url) {
+  const res = await fetch(url);
+  if (res.status === 401) {
+    window.location.href = '/admin/login';
+    throw new Error('Session expired');
+  }
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail || 'Request failed');
+  return body;
+}
+
+function fmtTs(ts) {
+  if (!ts) return '—';
+  return ts.replace('T', ' ').slice(0, 16);
+}
+
+function el(tag, opts) {
+  const node = document.createElement(tag);
+  if (opts) {
+    if (opts.text !== undefined) node.textContent = opts.text;
+    if (opts.className) node.className = opts.className;
+    if (opts.html !== undefined) node.innerHTML = opts.html;
+  }
+  return node;
+}
+
+function buildTable(columns, rows, onRowClick) {
+  if (!rows.length) return el('div', { className: 'empty', text: 'No results.' });
+  const table = el('table');
+  const thead = el('thead');
+  const hr = el('tr');
+  columns.forEach(c => hr.appendChild(el('th', { text: c.label })));
+  thead.appendChild(hr);
+  table.appendChild(thead);
+  const tbody = el('tbody');
+  rows.forEach(row => {
+    const tr = el('tr');
+    if (onRowClick) {
+      tr.className = 'clickable';
+      tr.addEventListener('click', () => onRowClick(row));
+    }
+    columns.forEach(c => tr.appendChild(el('td', { text: c.value(row) })));
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  return table;
+}
+
+function detailGrid(fields) {
+  const grid = el('div', { className: 'detail-grid' });
+  fields.forEach(([label, value]) => {
+    const cell = el('div');
+    cell.appendChild(el('span', { className: 'k', text: label }));
+    const v = el('span', { text: (value === null || value === undefined || value === '') ? '—' : String(value) });
+    cell.appendChild(v);
+    grid.appendChild(cell);
+  });
+  return grid;
+}
+
+// --- logout -----------------------------------------------------------
+document.getElementById('logoutBtn').addEventListener('click', async () => {
+  await fetch('/admin/logout', { method: 'POST' });
+  window.location.href = '/admin/login';
+});
+
+// --- tabs ---------------------------------------------------------------
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+  });
+});
+
+// --- Shipments ------------------------------------------------------
+async function loadFacilityOptions() {
+  try {
+    const facilities = await apiGet('/admin/api/facilities');
+    const select = document.getElementById('shpFacility');
+    facilities.forEach(f => {
+      const opt = el('option', { text: f.facility_name });
+      opt.value = f.facility_id;
+      select.appendChild(opt);
+    });
+  } catch (e) { /* facility filter is optional; ignore */ }
+}
+
+async function loadShipments() {
+  const shpError = document.getElementById('shpError');
+  const wrap = document.getElementById('shpTableWrap');
+  shpError.textContent = '';
+  document.getElementById('shpDetail').innerHTML = '';
+  const params = new URLSearchParams();
+  const search = document.getElementById('shpSearch').value.trim();
+  const status = document.getElementById('shpStatus').value;
+  const facilityId = document.getElementById('shpFacility').value;
+  if (search) params.set('search', search);
+  if (status) params.set('status', status);
+  if (facilityId) params.set('facility_id', facilityId);
+  try {
+    const rows = await apiGet('/admin/api/shipments?' + params.toString());
+    wrap.innerHTML = '';
+    wrap.appendChild(buildTable([
+      { label: 'Shipment', value: r => r.shipment_id },
+      { label: 'Order ref', value: r => r.order_reference },
+      { label: 'Status', value: r => r.current_status },
+      { label: 'Priority', value: r => r.priority_code },
+      { label: 'Facility', value: r => r.facility_name },
+      { label: 'Driver', value: r => r.driver_name },
+      { label: 'ETA', value: r => fmtTs(r.effective_eta_ts) },
+    ], rows, (row) => loadShipmentDetail(row.shipment_id)));
+  } catch (e) {
+    shpError.textContent = String(e.message || e);
+  }
+}
+
+async function loadShipmentDetail(shipmentId) {
+  const detail = document.getElementById('shpDetail');
+  detail.innerHTML = '';
+  try {
+    const s = await apiGet('/admin/api/shipments/' + encodeURIComponent(shipmentId));
+    const box = el('div', { className: 'detail-box' });
+    box.appendChild(el('h3', { text: s.shipment_id + ' — ' + s.order_reference }));
+    box.appendChild(detailGrid([
+      ['Status', s.current_status], ['Priority', s.priority_code],
+      ['Customer', s.customer_name], ['Product', s.product_category],
+      ['Origin', s.origin_name + ' (' + s.origin_city + ')'],
+      ['Load weight (kg)', s.load_weight_kg], ['Pallets', s.pallet_count],
+      ['Required dock type', s.required_dock_type],
+      ['Temp controlled', s.temperature_control_required ? 'Yes' : 'No'],
+      ['Driver', s.driver_name + ' (' + s.driver_id + ')'], ['Driver phone', s.driver_phone],
+      ['Driver status', s.driver_status],
+      ['Vehicle', s.registration_number + ' — ' + s.vehicle_type_code],
+      ['Facility', s.facility_name], ['Facility city/state', s.facility_city + ', ' + s.facility_state],
+      ['Effective ETA', fmtTs(s.effective_eta_ts)], ['ETA source', s.eta_source],
+      ['ETA confidence', s.eta_confidence], ['Delay reason', s.delay_reason_code],
+      ['Appointment', s.appointment_id], ['Appointment status', s.appointment_status],
+      ['Booking source', s.booking_source], ['Dock', s.dock_code],
+      ['Slot', s.slot_start_ts ? (fmtTs(s.slot_start_ts) + ' – ' + fmtTs(s.slot_end_ts)) : null],
+      ['Gate in', fmtTs(s.gate_in_ts)], ['Queue state', s.queue_state],
+      ['Queue position', s.queue_position], ['Arrival state', s.arrival_state],
+    ]));
+    const closeBtn = el('button', { className: 'link close-detail', text: 'Close' });
+    closeBtn.addEventListener('click', () => { detail.innerHTML = ''; });
+    box.appendChild(closeBtn);
+    detail.appendChild(box);
+  } catch (e) {
+    detail.appendChild(el('div', { className: 'error', text: String(e.message || e) }));
+  }
+}
+
+document.getElementById('shpFilterBtn').addEventListener('click', loadShipments);
+document.getElementById('shpSearch').addEventListener('keydown', e => { if (e.key === 'Enter') loadShipments(); });
+
+// --- Drivers --------------------------------------------------------
+async function loadDrivers() {
+  const drvError = document.getElementById('drvError');
+  const wrap = document.getElementById('drvTableWrap');
+  drvError.textContent = '';
+  document.getElementById('drvDetail').innerHTML = '';
+  const params = new URLSearchParams();
+  const search = document.getElementById('drvSearch').value.trim();
+  if (search) params.set('search', search);
+  try {
+    const rows = await apiGet('/admin/api/drivers?' + params.toString());
+    wrap.innerHTML = '';
+    wrap.appendChild(buildTable([
+      { label: 'Driver', value: r => r.driver_id },
+      { label: 'Name', value: r => r.driver_name },
+      { label: 'Phone', value: r => r.phone },
+      { label: 'Status', value: r => r.driver_status },
+      { label: 'Home base', value: r => r.home_base_city || '—' },
+      { label: 'Carrier', value: r => r.carrier_name },
+    ], rows, (row) => loadDriverDetail(row.driver_id)));
+  } catch (e) {
+    drvError.textContent = String(e.message || e);
+  }
+}
+
+async function loadDriverDetail(driverId) {
+  const detail = document.getElementById('drvDetail');
+  detail.innerHTML = '';
+  try {
+    const d = await apiGet('/admin/api/drivers/' + encodeURIComponent(driverId));
+    const box = el('div', { className: 'detail-box' });
+    box.appendChild(el('h3', { text: d.driver_name + ' (' + d.driver_id + ')' }));
+    box.appendChild(detailGrid([
+      ['Phone', d.phone], ['Licence', d.licence_number],
+      ['Home base', d.home_base_city], ['Status', d.driver_status],
+      ['Carrier', d.carrier_name + ' (' + d.carrier_id + ')'],
+    ]));
+    box.appendChild(el('h3', { text: 'Shipments (' + d.shipments.length + ')' }));
+    box.appendChild(buildTable([
+      { label: 'Shipment', value: r => r.shipment_id },
+      { label: 'Order ref', value: r => r.order_reference },
+      { label: 'Status', value: r => r.current_status },
+      { label: 'Facility', value: r => r.facility_name },
+      { label: 'Priority', value: r => r.priority_code },
+      { label: 'ETA', value: r => fmtTs(r.effective_eta_ts) },
+    ], d.shipments, (row) => {
+      document.querySelector('.tab[data-tab="shipments"]').click();
+      loadShipmentDetail(row.shipment_id);
+    }));
+    const closeBtn = el('button', { className: 'link close-detail', text: 'Close' });
+    closeBtn.addEventListener('click', () => { detail.innerHTML = ''; });
+    box.appendChild(closeBtn);
+    detail.appendChild(box);
+  } catch (e) {
+    detail.appendChild(el('div', { className: 'error', text: String(e.message || e) }));
+  }
+}
+
+document.getElementById('drvFilterBtn').addEventListener('click', loadDrivers);
+document.getElementById('drvSearch').addEventListener('keydown', e => { if (e.key === 'Enter') loadDrivers(); });
+
+// --- Facilities & docks -----------------------------------------------
+async function loadFacilities() {
+  const facError = document.getElementById('facError');
+  const list = document.getElementById('facList');
+  facError.textContent = '';
+  list.innerHTML = '';
+  try {
+    const facilities = await apiGet('/admin/api/facilities');
+    for (const f of facilities) {
+      const detail = await apiGet('/admin/api/facilities/' + encodeURIComponent(f.facility_id));
+      const card = el('div', { className: 'facility-card' });
+      card.appendChild(el('h3', { text: detail.facility_name + ' (' + detail.facility_id + ')' }));
+      card.appendChild(detailGrid([
+        ['City/state', detail.city + ', ' + detail.state],
+        ['Hours', detail.open_time + ' – ' + detail.close_time],
+        ['Check-in grace (min)', detail.checkin_grace_min],
+        ['Default unload (min)', detail.default_unload_min],
+        ['Active', detail.active_flag ? 'Yes' : 'No'],
+      ]));
+      card.appendChild(buildTable([
+        { label: 'Dock', value: r => r.dock_code },
+        { label: 'Type', value: r => r.dock_type },
+        { label: 'Refrigerated', value: r => r.supports_refrigerated ? 'Yes' : 'No' },
+        { label: 'Max weight (kg)', value: r => r.max_vehicle_weight_kg },
+        { label: 'Status', value: r => r.dock_status },
+      ], detail.docks));
+      if (detail.contacts.length) {
+        card.appendChild(el('div', { className: 'muted', text: 'Contacts', html: undefined }));
+        card.appendChild(buildTable([
+          { label: 'Role', value: r => r.contact_role },
+          { label: 'Name', value: r => r.contact_name },
+          { label: 'Email', value: r => r.email || '—' },
+          { label: 'Phone', value: r => r.phone || '—' },
+        ], detail.contacts));
+      }
+      list.appendChild(card);
+    }
+  } catch (e) {
+    facError.textContent = String(e.message || e);
+  }
+}
+
+// --- Recent reschedules -------------------------------------------------
+async function loadReschedules() {
+  const reschError = document.getElementById('reschError');
+  const wrap = document.getElementById('reschTableWrap');
+  reschError.textContent = '';
+  try {
+    const rows = await apiGet('/admin/api/reschedules/recent');
+    wrap.innerHTML = '';
+    wrap.appendChild(buildTable([
+      { label: 'Shipment', value: r => r.shipment_id },
+      { label: 'Order ref', value: r => r.order_reference },
+      { label: 'Driver', value: r => r.driver_name },
+      { label: 'From', value: r => r.old_dock_code + ' ' + fmtTs(r.old_slot_start_ts) },
+      { label: 'To', value: r => r.new_dock_code + ' ' + fmtTs(r.new_slot_start_ts) },
+      { label: 'Source', value: r => r.booking_source },
+      { label: 'Booked at', value: r => fmtTs(r.booked_at) },
+    ], rows));
+  } catch (e) {
+    reschError.textContent = String(e.message || e);
+  }
+}
+document.getElementById('reschRefreshBtn').addEventListener('click', loadReschedules);
+
+// --- initial load -------------------------------------------------------
+(async () => {
+  await loadFacilityOptions();
+  loadShipments();
+  loadDrivers();
+  loadFacilities();
+  loadReschedules();
+})();
+</script>
+</body>
+</html>

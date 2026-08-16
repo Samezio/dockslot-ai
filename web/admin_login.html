@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dockslot-ai — admin login</title>
+<style>
+  :root {
+    --bg: #0f172a; --panel: #1e293b; --border: #334155;
+    --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8;
+    --accent-text: #0f172a; --error: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+    background: var(--bg); color: var(--text);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    min-height: 100vh; padding: 24px 12px;
+  }
+  h1 { font-size: 1.15rem; margin: 0 0 4px; }
+  .subtitle { color: var(--muted); font-size: 0.85rem; margin-bottom: 20px; }
+  form {
+    width: 100%; max-width: 340px; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 10px; padding: 20px;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  label { font-size: 0.85rem; color: var(--muted); display: block; margin-bottom: 4px; }
+  input {
+    width: 100%; padding: 8px 10px; border-radius: 6px;
+    border: 1px solid var(--border); background: #0b1220;
+    color: var(--text); font-size: 0.95rem;
+  }
+  button {
+    padding: 9px 16px; border-radius: 6px; border: none;
+    background: var(--accent); color: var(--accent-text);
+    font-weight: 600; cursor: pointer; font-size: 0.9rem; margin-top: 4px;
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button:hover:not(:disabled) { filter: brightness(1.1); }
+  .error { color: var(--error); font-size: 0.85rem; min-height: 1em; }
+  .footer-link { margin-top: 20px; font-size: 0.8rem; color: var(--muted); }
+  .footer-link a { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<h1>dockslot-ai — admin login</h1>
+<div class="subtitle">Dispatcher/admin portal · not the driver chat</div>
+
+<form id="loginForm">
+  <div>
+    <label for="username">Username</label>
+    <input type="text" id="username" autocomplete="username" required>
+  </div>
+  <div>
+    <label for="password">Password</label>
+    <input type="password" id="password" autocomplete="current-password" required>
+  </div>
+  <div id="loginError" class="error"></div>
+  <button id="loginBtn" type="submit">Log in</button>
+</form>
+
+<div class="footer-link">
+  Driver chat is at <a href="/">/</a> · dispatcher schedule view is at <a href="/ops">/ops</a>.
+</div>
+
+<script>
+const form = document.getElementById('loginForm');
+const loginBtn = document.getElementById('loginBtn');
+const loginError = document.getElementById('loginError');
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  loginError.textContent = '';
+  loginBtn.disabled = true;
+  loginBtn.textContent = 'Logging in...';
+  try {
+    const res = await fetch('/admin/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: document.getElementById('username').value,
+        password: document.getElementById('password').value,
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      loginError.textContent = body.detail || 'Login failed.';
+      return;
+    }
+    window.location.href = '/admin';
+  } catch (err) {
+    loginError.textContent = 'Request failed: ' + err;
+  } finally {
+    loginBtn.disabled = false;
+    loginBtn.textContent = 'Log in';
+  }
+});
+</script>
+</body>
+</html>
